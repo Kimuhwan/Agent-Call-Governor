@@ -101,6 +101,8 @@ python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py agent-cal
 
 [평가 도구](evals/README.md)는 `quality_preservation_rate`와 `waste_control_rate`를 함께 보고합니다. 호출을 무작정 줄여 under-call을 만든 결과가 성공으로 보이지 않게 하기 위함입니다. 이 회귀 점수는 규칙의 일관성을 측정하며 실제 서비스 성공률을 주장하는 수치는 아닙니다. [최신 평가 결과](evals/results-2026-07-13.md)도 확인할 수 있습니다.
 
+첫 실제 Codex A/B 테스트에서는 두 조건 모두 4/4 작업을 완료했습니다. `balanced` Governor는 총 호출을 9회에서 3회로 줄였고, 블라인드 심사 품질도 8.63점에서 8.88점으로 높았습니다. 단 한 번의 방향성 테스트이므로 운영 환경의 확정 수치는 아닙니다. 테스트에서 발견한 예산-이력 불일치와 고위험 재시도 문제는 회귀 테스트와 함께 수정했습니다.
+
 ## 프로젝트 구조
 
 ```text

@@ -12,6 +12,8 @@ Use one profile per workflow. Budgets are upper bounds for ordinary calls, while
 
 These limits guide complex workflows. They do not justify an agent call when the task is already solvable from context or one direct tool.
 
+High-risk work always receives at least one materially changed-strategy retry, including under `strict`. This risk floor prevents an inconclusive first attempt from terminating medical, legal, security, financial, or production work while safe budget remains.
+
 ## Risk selection
 
 - `low`: reversible output, supplied evidence, and cheap error correction.

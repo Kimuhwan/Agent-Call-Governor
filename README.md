@@ -101,6 +101,8 @@ The policy itself has no runtime dependencies. The official Codex skill validato
 
 The [evaluation suite](evals/README.md) reports both `quality_preservation_rate` and `waste_control_rate`. This prevents call reduction from looking successful when it merely causes under-calling. These regression scores measure rule consistency, not a production success-rate claim. See the [latest checked-in results](evals/results-2026-07-13.md).
 
+In the first matched Codex A/B trial, both conditions completed 4/4 tasks. The balanced Governor reduced total calls from 9 to 3 while a blind judge preferred its answer quality (8.88 vs. 8.63). This is a single directional trial, not a production benchmark. The trial also exposed budget-history and high-risk retry edge cases, which are now covered by regression tests.
+
 ## Project layout
 
 ```text

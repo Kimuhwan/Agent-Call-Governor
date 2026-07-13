@@ -139,6 +139,49 @@ class GovernorTests(unittest.TestCase):
         })
         self.assertEqual(result["reason"], "low_progress_retry_exhausted")
 
+    def test_strict_high_risk_allows_one_changed_strategy_retry(self):
+        result = governor.evaluate({
+            "proposal": proposal(changed_strategy="Use an independent authoritative source"),
+            "profile": "strict",
+            "quality_risk": "high",
+            "history": [{"progress": "low_progress"}],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["effective_limit"], 2)
+        self.assertEqual(result["matching_history_count"], 1)
+        self.assertEqual(result["remaining_after_call"], 0)
+
+    def test_history_count_defaults_budget_used_and_blocks_overrun(self):
+        result = governor.evaluate({
+            "proposal": proposal(),
+            "history": [
+                {"progress": "material_progress"},
+                {"progress": "material_progress"},
+            ],
+        })
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "budget_exhausted")
+        self.assertEqual(result["matching_history_count"], 2)
+
+    def test_rejects_budget_used_lower_than_history_count(self):
+        with self.assertRaisesRegex(ValueError, "lower than matching history count"):
+            governor.evaluate({
+                "proposal": proposal(),
+                "history": [{"progress": "material_progress"}],
+                "budget": {"used": 0},
+            })
+
+    def test_history_budget_kind_keeps_ledgers_separate(self):
+        result = governor.evaluate({
+            "proposal": proposal(),
+            "history": [
+                {"budget_kind": "direct-tool", "progress": "material_progress"},
+                {"budget_kind": "agent", "progress": "material_progress"},
+            ],
+        })
+        self.assertEqual(result["matching_history_count"], 1)
+        self.assertTrue(result["allowed"])
+
     def test_quality_first_allows_two_changed_strategy_retries(self):
         result = governor.evaluate({
             "proposal": proposal(changed_strategy="Recalculate from raw inputs"),

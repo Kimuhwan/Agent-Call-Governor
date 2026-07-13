@@ -26,3 +26,9 @@ Use fresh-agent scenario evaluations and real workload telemetry to measure thos
 - under-call failures where a necessary lookup, verification, or specialist was suppressed.
 
 Treat call reduction as a win only when task success remains within the chosen quality tolerance.
+
+## Matched Codex A/B trials
+
+For a behavioral trial, give identical tasks to independent Codex runs with and without the Governor. Record completed tasks, direct-tool calls, subagent calls, identical retries, and uncertainties. Give anonymized outputs to a third evaluator that cannot see the execution condition or call counts.
+
+Report the sample size and do not generalize a single run into a production savings claim. See [the latest results](results-2026-07-13.md) for the first checked-in trial.

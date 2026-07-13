@@ -60,6 +60,8 @@ Use `balanced` unless the user, risk, or task explicitly justifies another profi
 
 Read [references/profiles.md](references/profiles.md) when selecting numeric limits or configuring the deterministic gate.
 
+Allow at least one materially changed-strategy retry for high-risk work, even under `strict`. Stop it only after the retry makes no progress, the result becomes sufficient, or the quality floor is otherwise satisfied.
+
 Count agent calls separately from direct tool calls.
 
 | Work type | Agent budget | Direct-tool guidance |

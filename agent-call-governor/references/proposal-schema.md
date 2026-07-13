@@ -24,6 +24,7 @@ Pass a JSON object to `scripts/governor.py evaluate`:
   "history": [
     {
       "fingerprint": "sha256-from-an-earlier-result",
+      "budget_kind": "agent",
       "progress": "material_progress"
     }
   ],
@@ -44,9 +45,9 @@ Top-level fields:
 - `history`: prior fingerprints and progress results;
 - `budget.kind`: `agent` (default) or `direct-tool` so their ledgers stay separate;
 - `budget.limit`: requested ceiling; the profile's risk floor raises it when it is unsafe;
-- `budget.used`: calls already consumed in this ledger.
+- `budget.used`: calls already consumed in this ledger. When omitted, it is derived from matching history entries. When supplied, it cannot be lower than that derived count.
 
-History progress values are `sufficient`, `material_progress`, `low_progress`, and `no_progress`. After `low_progress`, add a non-empty `proposal.changed_strategy` describing the material change.
+History progress values are `sufficient`, `material_progress`, `low_progress`, and `no_progress`. Set each entry's optional `budget_kind` to `agent` or `direct-tool`; an omitted value belongs to the currently evaluated ledger for backward compatibility. After `low_progress`, add a non-empty `proposal.changed_strategy` describing the material change.
 
 For a required call, set `proposal.mandatory_reason` to one of:
 

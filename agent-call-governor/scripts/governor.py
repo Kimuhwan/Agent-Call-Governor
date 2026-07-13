@@ -117,25 +117,41 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
     budget_kind = _enum(budget.get("kind", "agent"), BUDGET_KINDS, "budget.kind")
     profile_limit = PROFILE_LIMITS[profile][budget_kind][quality_risk]
     requested_limit = budget.get("limit", profile_limit)
-    used = budget.get("used", 0)
-    if not isinstance(requested_limit, int) or not isinstance(used, int):
-        raise ValueError("budget limit and used must be integers")
-    if requested_limit < 0 or used < 0:
-        raise ValueError("budget limit and used must be non-negative")
+    if not isinstance(requested_limit, int):
+        raise ValueError("budget limit must be an integer")
+    if requested_limit < 0:
+        raise ValueError("budget limit must be non-negative")
 
     effective_limit = max(requested_limit, profile_limit)
     floor_applied = effective_limit != requested_limit
     current = fingerprint(proposal)
-    remaining = max(effective_limit - used, 0)
     seen: set[str] = set()
     progress: list[str] = []
+    matching_history_count = 0
     for entry in history:
         if not isinstance(entry, dict):
             raise ValueError("each history item must be an object")
+        entry_budget_kind = _enum(
+            entry.get("budget_kind", budget_kind),
+            BUDGET_KINDS,
+            "history.budget_kind",
+        )
+        if entry_budget_kind == budget_kind:
+            matching_history_count += 1
         if isinstance(entry.get("fingerprint"), str):
             seen.add(entry["fingerprint"])
         if "progress" in entry:
             progress.append(_enum(entry["progress"], PROGRESS_VALUES, "history.progress"))
+
+    used = budget.get("used", matching_history_count)
+    if not isinstance(used, int):
+        raise ValueError("budget used must be an integer")
+    if used < 0:
+        raise ValueError("budget used must be non-negative")
+    if used < matching_history_count:
+        raise ValueError("budget.used cannot be lower than matching history count")
+
+    remaining = max(effective_limit - used, 0)
 
     context = {
         "profile": profile,
@@ -143,6 +159,7 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
         "budget_kind": budget_kind,
         "effective_limit": effective_limit,
         "budget_floor_applied": floor_applied,
+        "matching_history_count": matching_history_count,
         "mandatory_reason": mandatory_reason,
     }
 
@@ -166,7 +183,11 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
         return _decision(False, "no_progress_stop", current, remaining, context)
 
     low_progress_count = progress.count("low_progress")
-    allowed_retries = PROFILE_LIMITS[profile]["low_progress_retries"]
+    risk_retry_floor = 1 if quality_risk == "high" else 0
+    allowed_retries = max(
+        PROFILE_LIMITS[profile]["low_progress_retries"],
+        risk_retry_floor,
+    )
     if low_progress_count > allowed_retries:
         return _decision(False, "low_progress_retry_exhausted", current, remaining, context)
     if progress and progress[-1] == "low_progress" and not _nonempty(proposal.get("changed_strategy")):

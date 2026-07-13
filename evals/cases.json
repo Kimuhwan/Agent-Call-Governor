@@ -43,6 +43,12 @@
       "expected": {"allowed": true, "reason": "allowed"}
     },
     {
+      "name": "strict_high_risk_retry_floor",
+      "category": "quality_preservation",
+      "document": {"profile": "strict", "quality_risk": "high", "history": [{"progress": "low_progress"}], "proposal": {"changed_strategy": "Use an independent authoritative source"}},
+      "expected": {"allowed": true, "reason": "allowed", "matching_history_count": 1}
+    },
+    {
       "name": "explicit_verification_exception",
       "category": "quality_preservation",
       "document": {"history": [{"progress": "sufficient"}], "proposal": {"objective": "Perform the explicitly requested verification", "mandatory_reason": "explicit_verification"}},
@@ -101,6 +107,12 @@
       "category": "waste_control",
       "document": {"profile": "balanced", "quality_risk": "low", "budget": {"limit": 0, "used": 0}},
       "expected": {"allowed": false, "reason": "budget_exhausted", "effective_limit": 0}
+    },
+    {
+      "name": "history_derived_budget_exhaustion",
+      "category": "waste_control",
+      "document": {"history": [{"progress": "material_progress"}, {"progress": "material_progress"}]},
+      "expected": {"allowed": false, "reason": "budget_exhausted", "matching_history_count": 2}
     }
   ]
 }
