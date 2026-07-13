@@ -1,0 +1,106 @@
+{
+  "cases": [
+    {
+      "name": "strict_high_risk_floor",
+      "category": "quality_preservation",
+      "document": {"profile": "strict", "quality_risk": "high", "budget": {"limit": 0, "used": 0}},
+      "expected": {"allowed": true, "reason": "allowed", "effective_limit": 2, "budget_floor_applied": true}
+    },
+    {
+      "name": "quality_first_high_risk_floor",
+      "category": "quality_preservation",
+      "document": {"profile": "quality-first", "quality_risk": "high", "budget": {"limit": 1, "used": 3}},
+      "expected": {"allowed": true, "reason": "allowed", "effective_limit": 4}
+    },
+    {
+      "name": "high_stakes_exception",
+      "category": "quality_preservation",
+      "document": {"profile": "strict", "budget": {"limit": 1, "used": 4}, "proposal": {"mandatory_reason": "high_stakes"}},
+      "expected": {"allowed": true, "reason": "mandatory_exception"}
+    },
+    {
+      "name": "user_action_exception",
+      "category": "quality_preservation",
+      "document": {"profile": "strict", "history": [{"progress": "no_progress"}], "proposal": {"objective": "Publish the tested branch", "mandatory_reason": "user_requested_action"}},
+      "expected": {"allowed": true, "reason": "mandatory_exception"}
+    },
+    {
+      "name": "current_information_direct_tool",
+      "category": "quality_preservation",
+      "document": {"quality_risk": "high", "budget": {"kind": "direct-tool", "limit": 0, "used": 9}, "proposal": {"route": "direct-tool", "mandatory_reason": "current_information"}},
+      "expected": {"allowed": true, "reason": "mandatory_exception", "budget_kind": "direct-tool"}
+    },
+    {
+      "name": "balanced_changed_strategy_retry",
+      "category": "quality_preservation",
+      "document": {"history": [{"progress": "low_progress"}], "proposal": {"changed_strategy": "Use a separate authoritative source"}},
+      "expected": {"allowed": true, "reason": "allowed"}
+    },
+    {
+      "name": "quality_first_second_retry",
+      "category": "quality_preservation",
+      "document": {"profile": "quality-first", "history": [{"progress": "low_progress"}, {"progress": "low_progress"}], "proposal": {"changed_strategy": "Recalculate independently from raw data"}},
+      "expected": {"allowed": true, "reason": "allowed"}
+    },
+    {
+      "name": "explicit_verification_exception",
+      "category": "quality_preservation",
+      "document": {"history": [{"progress": "sufficient"}], "proposal": {"objective": "Perform the explicitly requested verification", "mandatory_reason": "explicit_verification"}},
+      "expected": {"allowed": true, "reason": "mandatory_exception"}
+    },
+    {
+      "name": "duplicate_block",
+      "category": "waste_control",
+      "document": {"history": [{"fingerprint": "$proposal", "progress": "material_progress"}]},
+      "expected": {"allowed": false, "reason": "duplicate_fingerprint"}
+    },
+    {
+      "name": "mandatory_duplicate_block",
+      "category": "waste_control",
+      "document": {"proposal": {"mandatory_reason": "user_requested_action"}, "history": [{"fingerprint": "$proposal", "progress": "material_progress"}]},
+      "expected": {"allowed": false, "reason": "duplicate_fingerprint"}
+    },
+    {
+      "name": "sufficient_stop",
+      "category": "waste_control",
+      "document": {"history": [{"progress": "sufficient"}]},
+      "expected": {"allowed": false, "reason": "stop_condition_already_satisfied"}
+    },
+    {
+      "name": "no_progress_stop",
+      "category": "waste_control",
+      "document": {"history": [{"progress": "no_progress"}]},
+      "expected": {"allowed": false, "reason": "no_progress_stop"}
+    },
+    {
+      "name": "strict_low_progress_stop",
+      "category": "waste_control",
+      "document": {"profile": "strict", "history": [{"progress": "low_progress"}], "proposal": {"changed_strategy": "Try a different source"}},
+      "expected": {"allowed": false, "reason": "low_progress_retry_exhausted"}
+    },
+    {
+      "name": "changed_strategy_required",
+      "category": "waste_control",
+      "document": {"history": [{"progress": "low_progress"}]},
+      "expected": {"allowed": false, "reason": "changed_strategy_required"}
+    },
+    {
+      "name": "balanced_retry_exhausted",
+      "category": "waste_control",
+      "document": {"history": [{"progress": "low_progress"}, {"progress": "low_progress"}], "proposal": {"changed_strategy": "Try another source"}},
+      "expected": {"allowed": false, "reason": "low_progress_retry_exhausted"}
+    },
+    {
+      "name": "budget_exhausted",
+      "category": "waste_control",
+      "document": {"profile": "strict", "quality_risk": "low", "budget": {"limit": 1, "used": 1}},
+      "expected": {"allowed": false, "reason": "budget_exhausted"}
+    },
+    {
+      "name": "low_risk_zero_agent_budget",
+      "category": "waste_control",
+      "document": {"profile": "balanced", "quality_risk": "low", "budget": {"limit": 0, "used": 0}},
+      "expected": {"allowed": false, "reason": "budget_exhausted", "effective_limit": 0}
+    }
+  ]
+}

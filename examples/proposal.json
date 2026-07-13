@@ -1,4 +1,6 @@
 {
+  "profile": "balanced",
+  "quality_risk": "high",
   "proposal": {
     "objective": "Inspect authentication failures",
     "route": "specialist-agent",
@@ -12,6 +14,7 @@
   },
   "history": [],
   "budget": {
+    "kind": "agent",
     "limit": 2,
     "used": 0
   }
