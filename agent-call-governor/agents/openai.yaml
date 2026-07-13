@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Call Governor"
+  short_description: "Reduce redundant delegation with explicit call budgets"
+  default_prompt: "Use $agent-call-governor to complete this task with the minimum sufficient delegation."
