@@ -1,0 +1,18 @@
+{
+  "proposal": {
+    "objective": "Inspect authentication failures",
+    "route": "specialist-agent",
+    "material_inputs": {
+      "scope": "server/auth",
+      "question": "Find the root cause"
+    },
+    "capability_gap": "The repository spans several authentication modules",
+    "expected_new_information": "A source-backed root cause",
+    "stop_condition": "A failing path is identified with file and line evidence"
+  },
+  "history": [],
+  "budget": {
+    "limit": 2,
+    "used": 0
+  }
+}
