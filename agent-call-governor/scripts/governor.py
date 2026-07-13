@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic budget and duplicate gate for Agent Call Governor."""
+"""Deterministic quality floor, budget, progress, and duplicate gate."""
 
 from __future__ import annotations
 
@@ -12,6 +12,36 @@ from typing import Any
 
 
 PROGRESS_VALUES = {"sufficient", "material_progress", "low_progress", "no_progress"}
+PROFILE_NAMES = {"strict", "balanced", "quality-first"}
+RISK_VALUES = {"low", "medium", "high"}
+BUDGET_KINDS = {"agent", "direct-tool"}
+MANDATORY_REASONS = {
+    "current_information",
+    "explicit_verification",
+    "high_stakes",
+    "private_state",
+    "missing_file",
+    "user_requested_action",
+    "safety",
+    "system_instruction",
+}
+PROFILE_LIMITS = {
+    "strict": {
+        "agent": {"low": 0, "medium": 1, "high": 2},
+        "direct-tool": {"low": 1, "medium": 3, "high": 5},
+        "low_progress_retries": 0,
+    },
+    "balanced": {
+        "agent": {"low": 0, "medium": 2, "high": 3},
+        "direct-tool": {"low": 1, "medium": 6, "high": 8},
+        "low_progress_retries": 1,
+    },
+    "quality-first": {
+        "agent": {"low": 1, "medium": 3, "high": 4},
+        "direct-tool": {"low": 2, "medium": 8, "high": 12},
+        "low_progress_retries": 2,
+    },
+}
 REQUIRED_FIELDS = (
     "objective",
     "route",
@@ -23,10 +53,16 @@ REQUIRED_FIELDS = (
 
 def _normalize(value: Any) -> Any:
     if isinstance(value, dict):
-        return {str(key).strip().lower(): _normalize(value[key]) for key in sorted(value, key=lambda item: str(item).lower())}
+        return {
+            str(key).strip().lower(): _normalize(value[key])
+            for key in sorted(value, key=lambda item: str(item).lower())
+        }
     if isinstance(value, list):
         normalized = [_normalize(item) for item in value]
-        return sorted(normalized, key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False))
+        return sorted(
+            normalized,
+            key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False),
+        )
     if isinstance(value, str):
         return " ".join(value.casefold().split())
     return value
@@ -38,12 +74,24 @@ def fingerprint(proposal: dict[str, Any]) -> str:
         "route": proposal.get("route", ""),
         "material_inputs": proposal.get("material_inputs", {}),
     }
-    canonical = json.dumps(_normalize(identity), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    canonical = json.dumps(
+        _normalize(identity),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _nonempty(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _enum(value: Any, allowed: set[str], field: str) -> str:
+    if not isinstance(value, str) or value not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"{field} must be one of: {choices}")
+    return value
 
 
 def evaluate(document: dict[str, Any]) -> dict[str, Any]:
@@ -55,49 +103,113 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
     if missing:
         raise ValueError("missing or empty proposal fields: " + ", ".join(missing))
 
+    profile = _enum(document.get("profile", "balanced"), PROFILE_NAMES, "profile")
+    quality_risk = _enum(document.get("quality_risk", "medium"), RISK_VALUES, "quality_risk")
+    mandatory_reason = proposal.get("mandatory_reason")
+    if mandatory_reason is not None:
+        mandatory_reason = _enum(mandatory_reason, MANDATORY_REASONS, "mandatory_reason")
+
     history = document.get("history", [])
     budget = document.get("budget", {})
     if not isinstance(history, list) or not isinstance(budget, dict):
         raise ValueError("history must be an array and budget must be an object")
 
-    limit = budget.get("limit", 1)
-    used = budget.get("used", 0)
-    if not isinstance(limit, int) or not isinstance(used, int) or limit < 0 or used < 0:
-        raise ValueError("budget limit and used must be non-negative integers")
+    budget_kind = _enum(budget.get("kind", "agent"), BUDGET_KINDS, "budget.kind")
+    profile_limit = PROFILE_LIMITS[profile][budget_kind][quality_risk]
+    requested_limit = budget.get("limit", profile_limit)
+    if not isinstance(requested_limit, int):
+        raise ValueError("budget limit must be an integer")
+    if requested_limit < 0:
+        raise ValueError("budget limit must be non-negative")
 
+    effective_limit = max(requested_limit, profile_limit)
+    floor_applied = effective_limit != requested_limit
     current = fingerprint(proposal)
-    remaining = max(limit - used, 0)
     seen: set[str] = set()
     progress: list[str] = []
+    matching_history_count = 0
     for entry in history:
         if not isinstance(entry, dict):
             raise ValueError("each history item must be an object")
+        entry_budget_kind = _enum(
+            entry.get("budget_kind", budget_kind),
+            BUDGET_KINDS,
+            "history.budget_kind",
+        )
+        if entry_budget_kind == budget_kind:
+            matching_history_count += 1
         if isinstance(entry.get("fingerprint"), str):
             seen.add(entry["fingerprint"])
         if "progress" in entry:
-            if entry["progress"] not in PROGRESS_VALUES:
-                raise ValueError(f"invalid progress value: {entry['progress']}")
-            progress.append(entry["progress"])
+            progress.append(_enum(entry["progress"], PROGRESS_VALUES, "history.progress"))
 
+    used = budget.get("used", matching_history_count)
+    if not isinstance(used, int):
+        raise ValueError("budget used must be an integer")
+    if used < 0:
+        raise ValueError("budget used must be non-negative")
+    if used < matching_history_count:
+        raise ValueError("budget.used cannot be lower than matching history count")
+
+    remaining = max(effective_limit - used, 0)
+
+    context = {
+        "profile": profile,
+        "quality_risk": quality_risk,
+        "budget_kind": budget_kind,
+        "effective_limit": effective_limit,
+        "budget_floor_applied": floor_applied,
+        "matching_history_count": matching_history_count,
+        "mandatory_reason": mandatory_reason,
+    }
+
+    # Exact duplicates remain blocked even when a mandatory exception applies.
+    # This prevents repeated external side effects and identical retries.
     if current in seen:
-        return _decision(False, "duplicate_fingerprint", current, remaining)
+        return _decision(False, "duplicate_fingerprint", current, remaining, context)
+
+    if mandatory_reason:
+        return _decision(
+            True,
+            "mandatory_exception",
+            current,
+            max(remaining - 1, 0),
+            context,
+        )
+
     if "sufficient" in progress:
-        return _decision(False, "stop_condition_already_satisfied", current, remaining)
+        return _decision(False, "stop_condition_already_satisfied", current, remaining, context)
     if progress and progress[-1] == "no_progress":
-        return _decision(False, "no_progress_stop", current, remaining)
-    if progress.count("low_progress") >= 2:
-        return _decision(False, "low_progress_retry_exhausted", current, remaining)
-    if used >= limit:
-        return _decision(False, "budget_exhausted", current, remaining)
-    return _decision(True, "allowed", current, max(remaining - 1, 0))
+        return _decision(False, "no_progress_stop", current, remaining, context)
+
+    low_progress_count = progress.count("low_progress")
+    risk_retry_floor = 1 if quality_risk == "high" else 0
+    allowed_retries = max(
+        PROFILE_LIMITS[profile]["low_progress_retries"],
+        risk_retry_floor,
+    )
+    if low_progress_count > allowed_retries:
+        return _decision(False, "low_progress_retry_exhausted", current, remaining, context)
+    if progress and progress[-1] == "low_progress" and not _nonempty(proposal.get("changed_strategy")):
+        return _decision(False, "changed_strategy_required", current, remaining, context)
+    if used >= effective_limit:
+        return _decision(False, "budget_exhausted", current, remaining, context)
+    return _decision(True, "allowed", current, max(remaining - 1, 0), context)
 
 
-def _decision(allowed: bool, reason: str, current: str, remaining: int) -> dict[str, Any]:
+def _decision(
+    allowed: bool,
+    reason: str,
+    current: str,
+    remaining: int,
+    context: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "allowed": allowed,
         "reason": reason,
         "fingerprint": current,
         "remaining_after_call": remaining,
+        **context,
     }
 
 

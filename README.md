@@ -6,9 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Codex Skill](https://img.shields.io/badge/Codex-Skill-111827)](agent-call-governor/SKILL.md)
 
-Use fewer agent calls without sacrificing correctness.
+Remove wasted calls without turning quality controls into a blanket ban.
 
-Agent Call Governor is a lightweight [Codex skill](agent-call-governor/SKILL.md) that applies a least-call policy before delegation, retries, and multi-agent workflows. It combines explicit call budgets, duplicate fingerprints, progress gates, and observable stop conditions.
+Agent Call Governor is a lightweight [Codex skill](agent-call-governor/SKILL.md) that applies a quality-preserving call policy before delegation, retries, and multi-agent workflows. It combines risk-aware budgets, duplicate fingerprints, progress gates, and observable stop conditions.
 
 ## Why use it?
 
@@ -25,6 +25,8 @@ flowchart LR
 ```
 
 Direct tools and agent calls are budgeted separately. Required calls for freshness, verification, safety, private state, or explicit user actions are never suppressed.
+
+The objective is **minimum sufficient calls**, not minimum calls. When cost controls would materially increase the chance of an incorrect, stale, unsafe, or incomplete result, the quality floor wins.
 
 ## Install
 
@@ -67,6 +69,16 @@ Before a call, Codex identifies the capability gap, expected new information, ch
 
 See [SKILL.md](agent-call-governor/SKILL.md) for the complete policy.
 
+## Profiles
+
+| Profile | Best for | Behavior |
+| --- | --- | --- |
+| `strict` | Reversible, low-risk, latency-sensitive work | Small budgets and no low-progress retry |
+| `balanced` | Default product and engineering work | Removes waste while preserving ordinary verification |
+| `quality-first` | High-impact or costly-to-correct work | Larger risk floors and two changed-strategy retries |
+
+High-risk work automatically receives a minimum safe budget even when a lower limit is configured. Mandatory calls can exceed the budget, but exact duplicate fingerprints remain blocked to prevent repeated side effects. See [profile details](agent-call-governor/references/profiles.md).
+
 ## Optional deterministic gate
 
 For long-running workflows, the zero-dependency Python helper can block duplicate or over-budget proposals:
@@ -81,10 +93,15 @@ The command returns exit code `0` when allowed, `2` when rejected by policy, and
 
 ```bash
 python -m unittest discover -s tests -v
+python evals/run_evals.py
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py agent-call-governor
 ```
 
 The policy itself has no runtime dependencies. The official Codex skill validator requires PyYAML.
+
+The [evaluation suite](evals/README.md) reports both `quality_preservation_rate` and `waste_control_rate`. This prevents call reduction from looking successful when it merely causes under-calling. These regression scores measure rule consistency, not a production success-rate claim. See the [latest checked-in results](evals/results-2026-07-13.md).
+
+In the first matched Codex A/B trial, both conditions completed 4/4 tasks. The balanced Governor reduced total calls from 9 to 3 while a blind judge preferred its answer quality (8.88 vs. 8.63). This is a single directional trial, not a production benchmark. The trial also exposed budget-history and high-risk retry edge cases, which are now covered by regression tests.
 
 ## Project layout
 
@@ -94,6 +111,7 @@ agent-call-governor/     Codex-discoverable skill
   references/            On-demand proposal schema
   scripts/governor.py    Optional deterministic gate
 examples/                Ready-to-run proposal input
+evals/                   Quality-preservation and waste-control cases
 tests/                   Standard-library unit tests
 ```
 

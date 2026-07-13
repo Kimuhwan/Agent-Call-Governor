@@ -1,11 +1,26 @@
 ---
 name: agent-call-governor
-description: Govern agent delegation and repeated tool use with least-call routing, explicit budgets, duplicate fingerprints, progress gates, and stop conditions. Apply before delegating to subagents, spawning parallel agents, retrying a tool or agent call, or planning a multi-call workflow; use especially when call cost, latency, or runaway delegation matters.
+description: Govern agent delegation and repeated tool use with quality-preserving routing, risk-aware budgets, duplicate fingerprints, progress gates, and stop conditions. Apply before delegating to subagents, spawning parallel agents, retrying a tool or agent call, or planning a multi-call workflow; use especially when call cost, latency, runaway delegation, or under-calling could affect task quality.
 ---
 
 # Agent Call Governor
 
-Use the minimum sufficient delegation that still completes the task correctly. Apply this policy in the current agent; never delegate to another agent merely to decide whether delegation is necessary.
+Use the minimum sufficient delegation that completes the task correctly. Optimize for successful task completion first and call reduction second. Apply this policy in the current agent; never delegate merely to decide whether delegation is necessary.
+
+## Protect the quality floor
+
+Treat budgets as ceilings for ordinary work, not targets and not absolute bans. Before reducing a route or stopping, check whether doing so would materially increase the risk of an incorrect, stale, unsafe, or incomplete result.
+
+Escalate the route or budget when any of these signals is present:
+
+- material factual uncertainty remains;
+- the decision is high stakes or hard to reverse;
+- independent verification could catch a costly error;
+- evidence spans distinct systems or domains;
+- acceptance criteria are not yet demonstrated; or
+- a required action has not actually occurred.
+
+Never claim savings when the task success rate falls. Measure under-calling alongside redundant calls.
 
 ## Route work from cheapest to strongest
 
@@ -35,7 +50,17 @@ Do not expose private reasoning. Share only brief, user-relevant progress update
 
 Reject the call if the capability gap, expected result, or stop condition is vague. Default to no call when necessity is unclear.
 
-## Use default budgets
+## Select a profile and budget
+
+Use `balanced` unless the user, risk, or task explicitly justifies another profile:
+
+- `strict`: prefer lower latency and cost for reversible, low-risk work;
+- `balanced`: preserve ordinary quality while removing redundant calls;
+- `quality-first`: allow more verification for high-impact, uncertain, or expensive-to-correct work.
+
+Read [references/profiles.md](references/profiles.md) when selecting numeric limits or configuring the deterministic gate.
+
+Allow at least one materially changed-strategy retry for high-risk work, even under `strict`. Stop it only after the retry makes no progress, the result becomes sufficient, or the quality floor is otherwise satisfied.
 
 Count agent calls separately from direct tool calls.
 
@@ -47,7 +72,7 @@ Count agent calls separately from direct tool calls.
 | Repository or multi-document investigation and implementation | 2 | Batch related reads |
 | Clearly decomposable multi-domain work | 3 | Require explicit reconciliation |
 
-Allow at most one handoff. Allow no identical retry. Raise a budget only for a system or developer requirement, an explicit user request, high-stakes verification, or genuinely independent decomposition. State the reason in a user-relevant progress update when the increase is material.
+Allow at most one handoff. Allow no identical retry. Raise a budget for quality-floor signals, a system or developer requirement, an explicit user request, high-stakes verification, or genuinely independent decomposition. State the reason in a user-relevant progress update when the increase is material.
 
 ## Block duplicates
 
@@ -63,7 +88,9 @@ Reject a proposed call when:
 
 Permit one retry only when the query, parameters, source, or strategy changes materially. Record a new fingerprint and the changed assumption.
 
-For complex or long-running workflows, run `python scripts/governor.py evaluate proposal.json` to apply deterministic budget and duplicate checks. Read [references/proposal-schema.md](references/proposal-schema.md) when preparing the JSON input. Do not run the script for a simple decision that is already obvious.
+Apply duplicate prevention before mandatory exceptions. An explicit request does not authorize repeating an identical completed external action; require changed inputs or a new objective.
+
+For complex or long-running workflows, run `python scripts/governor.py evaluate proposal.json` to apply deterministic risk floors, budget, progress, and duplicate checks. Read [references/proposal-schema.md](references/proposal-schema.md) when preparing the JSON input. Do not run the script for a simple decision that is already obvious.
 
 ## Gate on progress
 
@@ -80,4 +107,6 @@ Recalculate the cheapest sufficient route after every result. Never continue mer
 
 Do not suppress calls required for current or rapidly changing information, explicit verification, high-stakes factual checking, private account or connector access, missing file retrieval, explicit user-requested actions, safety requirements, or system and developer instructions.
 
-Prefer a complete answer with clearly stated uncertainty over speculative extra calls.
+When a mandatory call exceeds budget, allow it and record the reason. Still block an identical fingerprint to prevent duplicate external side effects.
+
+Prefer a complete answer with clearly stated uncertainty over speculative extra calls. Prefer necessary verification over an answer whose uncertainty would be materially misleading.
