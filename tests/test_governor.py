@@ -1,9 +1,11 @@
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "agent-call-governor" / "scripts" / "governor.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("governor", SCRIPT)
 assert SPEC and SPEC.loader
 governor = importlib.util.module_from_spec(SPEC)
@@ -24,6 +26,13 @@ def proposal(**overrides):
 
 
 class GovernorTests(unittest.TestCase):
+    def test_packaged_policy_matches_legacy_module(self):
+        from agent_call_governor_runtime import evaluate, fingerprint
+
+        self.assertIs(evaluate, governor.evaluate)
+        self.assertIs(fingerprint, governor.fingerprint)
+        self.assertEqual(fingerprint(proposal()), governor.fingerprint(proposal()))
+
     def test_balanced_profile_is_default(self):
         result = governor.evaluate({"proposal": proposal()})
         self.assertTrue(result["allowed"])
