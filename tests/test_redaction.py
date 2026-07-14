@@ -6,7 +6,8 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from unittest.mock import patch
 
 from agent_call_governor_runtime.cli import export_jsonl
 from agent_call_governor_runtime.ledger import CallLedger
@@ -22,6 +23,11 @@ def custom_key(value: str) -> str:
     return "custom:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+class ExpandablePurePosixPath(PurePosixPath):
+    def expanduser(self) -> PurePosixPath:
+        return self
+
+
 class RedactionTests(unittest.TestCase):
     def test_text_redacts_credentials_email_and_home_path(self) -> None:
         raw = (
@@ -35,6 +41,23 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("C:/Users/Ada", safe)
         self.assertNotIn(r"C:\Users\Ada", safe)
         self.assertIn("[REDACTED", safe)
+
+    def test_explicit_home_redacts_both_separators_under_posix_normalization(self) -> None:
+        forward = "c:/users/ADA/forward.txt"
+        backward = r"C:\USERS\ada\backward.txt"
+
+        with patch(
+            "agent_call_governor_runtime.redaction.Path",
+            ExpandablePurePosixPath,
+        ):
+            safe = redact_text(
+                f"{forward} {backward}",
+                home_directory="C:/Users/Ada",
+            )
+
+        self.assertNotIn(forward, safe)
+        self.assertNotIn(backward, safe)
+        self.assertEqual(safe.count("[REDACTED_HOME]"), 2)
 
     def test_known_fields_keep_safe_scalars_and_unknown_strings_are_hashed(self) -> None:
         safe = sanitize_metadata(

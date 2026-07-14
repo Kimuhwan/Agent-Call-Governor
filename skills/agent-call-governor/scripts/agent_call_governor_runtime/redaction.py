@@ -57,8 +57,14 @@ def redact_text(value: str, *, home_directory: str | None = None) -> str:
     safe = _EMAIL.sub("[REDACTED_EMAIL]", safe)
     home = str(Path(home_directory).expanduser()) if home_directory else str(Path.home())
     if home:
-        safe = re.sub(re.escape(home), "[REDACTED_HOME]", safe, flags=re.IGNORECASE)
-        safe = re.sub(re.escape(home.replace("\\", "/")), "[REDACTED_HOME]", safe, flags=re.IGNORECASE)
+        home_variants = {home, home.replace("\\", "/"), home.replace("/", "\\")}
+        for candidate in home_variants:
+            safe = re.sub(
+                re.escape(candidate),
+                "[REDACTED_HOME]",
+                safe,
+                flags=re.IGNORECASE,
+            )
     return safe
 
 
