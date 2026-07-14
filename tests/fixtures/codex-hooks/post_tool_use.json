@@ -1,0 +1,15 @@
+{
+  "session_id": "session-1",
+  "turn_id": "turn-1",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "mcp__docs__search",
+  "tool_use_id": "tool-call-1",
+  "tool_input": {
+    "query": "secret customer question"
+  },
+  "tool_response": {
+    "content": "secret customer answer"
+  },
+  "model": "gpt-5",
+  "permission_mode": "default"
+}

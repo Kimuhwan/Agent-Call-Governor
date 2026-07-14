@@ -128,6 +128,20 @@ class CallLedger:
             rows = connection.execute(query, parameters).fetchall()
         return [_event_from_row(row) for row in rows]
 
+    def latest_event(self, session_id: str, call_id: str) -> CallEvent | None:
+        """Return the latest persisted phase for a call, if it exists."""
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM call_events
+                WHERE session_id = ? AND call_id = ?
+                ORDER BY seq DESC
+                LIMIT 1
+                """,
+                (session_id, call_id),
+            ).fetchone()
+        return None if row is None else _event_from_row(row)
+
     def history(self, session_id: str) -> list[dict[str, str]]:
         placeholders = ",".join("?" for _ in _COUNTED_PHASES)
         query = f"""
