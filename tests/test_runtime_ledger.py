@@ -28,6 +28,7 @@ class RuntimeLedgerTests(unittest.TestCase):
         *,
         session_id="session-1",
         call_id="call-1",
+        objective="Inspect authentication failure",
         fingerprint="fp-1",
         progress=None,
         budget_kind="agent",
@@ -37,7 +38,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             session_id=session_id,
             call_id=call_id,
             phase=phase,
-            objective="Inspect authentication failure",
+            objective=objective,
             route="specialist-agent",
             fingerprint=fingerprint,
             budget_kind=budget_kind,
@@ -91,6 +92,12 @@ class RuntimeLedgerTests(unittest.TestCase):
             [{"fingerprint": "fp-1", "budget_kind": "agent"}],
         )
 
+    def test_cancelled_before_execution_releases_started_reservation(self):
+        self.ledger.append(self.event("started"))
+        self.ledger.append(self.event("cancelled", progress="no_progress"))
+
+        self.assertEqual(self.ledger.history("session-1"), [])
+
     def test_latest_terminal_progress_wins(self):
         self.ledger.append(self.event("started"))
         self.ledger.append(self.event("failed", progress="low_progress"))
@@ -137,22 +144,33 @@ class RuntimeLedgerTests(unittest.TestCase):
         self.assertEqual(len(decoded), 2)
         self.assertEqual(decoded[0]["metadata"], {"safe": "value"})
 
-    def test_raw_material_inputs_are_not_part_of_events(self):
+    def test_raw_proposal_text_is_not_part_of_events(self):
+        objective_canary = "OBJECTIVE-CANARY-should-never-be-persisted"
         proposal = CallProposal(
             session_id="session-1",
-            objective="Inspect authentication failure",
+            objective=objective_canary,
             route="specialist-agent",
             capability_gap="Repository evidence is missing",
             expected_new_information="A source-backed root cause",
             stop_condition="The failing path is identified",
             material_inputs={"prompt": "secret prompt"},
         )
-        self.ledger.append(self.event("started", fingerprint=proposal.fingerprint))
+        self.ledger.append(
+            self.event(
+                "started",
+                objective=proposal.objective,
+                fingerprint=proposal.fingerprint,
+            )
+        )
 
         stored = self.jsonl_path.read_text(encoding="utf-8")
+        sqlite_bytes = self.db_path.read_bytes()
 
+        self.assertNotIn(objective_canary, stored)
+        self.assertNotIn(objective_canary.encode(), sqlite_bytes)
         self.assertNotIn("secret prompt", stored)
         self.assertNotIn("material_inputs", stored)
+        self.assertRegex(self.ledger.events("session-1")[0].objective, r"^sha256:[0-9a-f]{64}$")
 
     def test_metadata_must_be_json_compatible(self):
         with self.assertRaisesRegex(ValueError, "metadata must be JSON-compatible"):

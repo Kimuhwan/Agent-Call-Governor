@@ -5,14 +5,26 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import warnings
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from .models import CallEvent
 
 
 _COUNTED_PHASES = ("started", "completed", "failed")
+T = TypeVar("T")
+
+
+class DuplicateCallIdError(ValueError):
+    """Raised when a session attempts to reuse a lifecycle call ID."""
+
+    def __init__(self, session_id: str, call_id: str) -> None:
+        self.session_id = session_id
+        self.call_id = call_id
+        super().__init__(f"call_id already exists in session: {call_id}")
 
 
 class CallLedger:
@@ -73,11 +85,85 @@ class CallLedger:
                 )
 
     def append(self, event: CallEvent) -> None:
-        value = event.to_dict()
         with closing(self._connect()) as connection:
             with connection:
-                connection.execute(
+                self._insert(connection, event)
+        self._mirror_best_effort((event,))
+
+    def append_terminal_if_open(self, event: CallEvent) -> bool:
+        """Atomically append one terminal phase for an open lifecycle call."""
+        if event.phase not in {"completed", "failed", "cancelled"}:
+            raise ValueError("terminal event phase must be completed, failed, or cancelled")
+        inserted = False
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                latest = connection.execute(
                     """
+                    SELECT phase FROM call_events
+                    WHERE session_id = ? AND call_id = ?
+                    ORDER BY seq DESC
+                    LIMIT 1
+                    """,
+                    (event.session_id, event.call_id),
+                ).fetchone()
+                if latest is not None and str(latest["phase"]) in {"proposed", "started"}:
+                    self._insert(connection, event)
+                    inserted = True
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        if inserted:
+            self._mirror_best_effort((event,))
+        return inserted
+
+    def atomic_transition(
+        self,
+        session_id: str,
+        operation: Callable[[list[dict[str, str]]], tuple[T, Sequence[CallEvent]]],
+    ) -> T:
+        """Serialize history evaluation and lifecycle reservation in SQLite.
+
+        ``BEGIN IMMEDIATE`` ensures concurrent processes cannot both decide from
+        the same stale session history. The optional JSONL mirror is written only
+        after the authoritative SQLite transaction commits.
+        """
+        events: tuple[CallEvent, ...] = ()
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                history = self._history(connection, session_id)
+                result, built_events = operation(history)
+                events = tuple(built_events)
+                if not events:
+                    raise ValueError("atomic transition must persist at least one event")
+                call_ids = {event.call_id for event in events}
+                if len(call_ids) != 1:
+                    raise ValueError("atomic transition events must share one call_id")
+                for event in events:
+                    if event.session_id != session_id:
+                        raise ValueError("atomic transition events must match session_id")
+                call_id = next(iter(call_ids))
+                existing = connection.execute(
+                    "SELECT 1 FROM call_events WHERE session_id = ? AND call_id = ? LIMIT 1",
+                    (session_id, call_id),
+                ).fetchone()
+                if existing is not None:
+                    raise DuplicateCallIdError(session_id, call_id)
+                for event in events:
+                    self._insert(connection, event)
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        self._mirror_best_effort(events)
+        return result
+
+    @staticmethod
+    def _insert(connection: sqlite3.Connection, event: CallEvent) -> None:
+        connection.execute(
+            """
                 INSERT INTO call_events (
                     event_id, schema_version, session_id, call_id, parent_call_id,
                     phase, occurred_at, objective, route, fingerprint, budget_kind,
@@ -86,36 +172,64 @@ class CallLedger:
                     error_type
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        event.event_id,
-                        event.schema_version,
-                        event.session_id,
-                        event.call_id,
-                        event.parent_call_id,
-                        event.phase,
-                        event.occurred_at,
-                        event.objective,
-                        event.route,
-                        event.fingerprint,
-                        event.budget_kind,
-                        event.profile,
-                        event.quality_risk,
-                        event.mode,
-                        _optional_bool(event.policy_allowed),
-                        _optional_bool(event.execution_allowed),
-                        event.decision_reason,
-                        event.progress,
-                        event.duration_ms,
-                        event.source,
-                        json.dumps(dict(event.metadata), ensure_ascii=False, sort_keys=True),
-                        event.error_type,
-                    ),
+            (
+                event.event_id,
+                event.schema_version,
+                event.session_id,
+                event.call_id,
+                event.parent_call_id,
+                event.phase,
+                event.occurred_at,
+                event.objective,
+                event.route,
+                event.fingerprint,
+                event.budget_kind,
+                event.profile,
+                event.quality_risk,
+                event.mode,
+                _optional_bool(event.policy_allowed),
+                _optional_bool(event.execution_allowed),
+                event.decision_reason,
+                event.progress,
+                event.duration_ms,
+                event.source,
+                json.dumps(dict(event.metadata), ensure_ascii=False, sort_keys=True),
+                event.error_type,
+            ),
+        )
+
+    def _append_jsonl(self, events: Sequence[CallEvent]) -> None:
+        if self.jsonl_path is None:
+            return
+        encoded = [
+            json.dumps(
+                event.to_dict(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            for event in events
+        ]
+        with self._jsonl_lock:
+            with self.jsonl_path.open("a", encoding="utf-8", newline="\n") as stream:
+                for line in encoded:
+                    stream.write(line + "\n")
+
+    def _mirror_best_effort(self, events: Sequence[CallEvent]) -> None:
+        """Mirror authoritative events without changing execution semantics."""
+        try:
+            self._append_jsonl(events)
+        except Exception as exc:
+            try:
+                warnings.warn(
+                    f"Agent Call Governor JSONL mirror failed: {type(exc).__name__}",
+                    RuntimeWarning,
+                    stacklevel=3,
                 )
-        if self.jsonl_path is not None:
-            encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-            with self._jsonl_lock:
-                with self.jsonl_path.open("a", encoding="utf-8", newline="\n") as stream:
-                    stream.write(encoded + "\n")
+            except Exception:
+                # Warning filters and custom warning hooks may raise. An optional
+                # mirror must never invalidate an authoritative SQLite commit.
+                pass
 
     def events(self, session_id: str | None = None) -> list[CallEvent]:
         query = "SELECT * FROM call_events"
@@ -143,6 +257,11 @@ class CallLedger:
         return None if row is None else _event_from_row(row)
 
     def history(self, session_id: str) -> list[dict[str, str]]:
+        with closing(self._connect()) as connection:
+            return self._history(connection, session_id)
+
+    @staticmethod
+    def _history(connection: sqlite3.Connection, session_id: str) -> list[dict[str, str]]:
         placeholders = ",".join("?" for _ in _COUNTED_PHASES)
         query = f"""
             SELECT event.*
@@ -150,13 +269,13 @@ class CallLedger:
             JOIN (
                 SELECT call_id, MAX(seq) AS latest_seq
                 FROM call_events
-                WHERE session_id = ? AND phase IN ({placeholders})
+                WHERE session_id = ?
                 GROUP BY call_id
             ) AS latest ON event.seq = latest.latest_seq
+            WHERE event.phase IN ({placeholders})
             ORDER BY event.seq
         """
-        with closing(self._connect()) as connection:
-            rows = connection.execute(query, (session_id, *_COUNTED_PHASES)).fetchall()
+        rows = connection.execute(query, (session_id, *_COUNTED_PHASES)).fetchall()
         history: list[dict[str, str]] = []
         for row in rows:
             item = {

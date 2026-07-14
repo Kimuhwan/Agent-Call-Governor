@@ -51,6 +51,12 @@ agent = Agent(name="Support", instructions="Help the customer.")
 result = runner.run_sync(proposal, agent, "The application-owned input")
 ```
 
+`GovernedRunner` injects a fresh `build_run_hooks` observer into each run unless
+the caller already supplied `hooks` or constructed it with
+`observe_internal_calls=False`. With an outer `enforce` runtime, those internal
+callbacks remain observation-only while the complete run keeps the enforceable
+application boundary.
+
 `GovernedRunner` deliberately does not expose a streaming shortcut: a streamed
 run continues after the initial object is returned, so completion must be tied
 to the consumer's real stream lifecycle rather than recorded early.
@@ -64,10 +70,13 @@ hooks = build_run_hooks(observe_runtime)
 result = await Runner.run(agent, input_value, hooks=hooks)
 ```
 
-The default mapper stores names, IDs, event kinds, and fingerprints. It does not
-persist system prompts, model inputs, tool arguments, tool results, or agent
-outputs. A custom `proposal_factory(SDKHookCall)` receives only a privacy-safe
-descriptor.
+The default mapper stores names, IDs, event kinds, and fingerprints. It hashes
+transient system prompts, model inputs, and string tool arguments before making
+an identity; JSON tool arguments are canonicalized for object-key order and
+whitespace first. It does not persist those values, tool results, or agent outputs.
+Agent starts and tool callbacks without exposed arguments use per-event nonces so
+legitimate repeated turns are not mislabeled as exact duplicates. A custom
+`proposal_factory(SDKHookCall)` receives only a privacy-safe descriptor.
 
 ## Guard a function tool
 
@@ -82,10 +91,17 @@ def lookup_order(order_id: str) -> str:
     ...
 ```
 
+The default proposal requires a per-workflow `session_id`. For a long-lived
+guardrail object, pass `session_id_factory(data)` instead so unrelated users or
+runs never share budgets. A custom `proposal_factory` may supply the scoped
+`CallProposal.session_id` itself.
+
 The default `reject_content` behavior prevents the function body from running
 and gives the model a policy reason. Pass `blocked_behavior="raise_exception"`
 to halt the run instead. An allowed input guardrail records a conservative
 `started` event; an input guardrail alone cannot know the eventual tool result.
+All async callbacks move SQLite/policy work off the event-loop thread and finish
+authoritative terminal recording before propagating cancellation.
 
 ## Official SDK references
 

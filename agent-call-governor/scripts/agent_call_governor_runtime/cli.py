@@ -35,9 +35,9 @@ def build_report(events: list[CallEvent]) -> dict[str, Any]:
         for event in call_events:
             if event.phase == "proposed":
                 policy_decisions[key] = event
-            if event.phase in {"started", "completed", "failed"}:
-                executed.add(key)
         final = call_events[-1]
+        if final.phase in {"started", "completed", "failed"}:
+            executed.add(key)
         final_states[final.phase] += 1
         budget_kinds[final.budget_kind] += 1
         modes[final.mode] += 1

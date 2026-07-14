@@ -50,23 +50,6 @@ REQUIRED_FIELDS = (
 )
 
 
-def _normalize(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            str(key).strip().lower(): _normalize(value[key])
-            for key in sorted(value, key=lambda item: str(item).lower())
-        }
-    if isinstance(value, list):
-        normalized = [_normalize(item) for item in value]
-        return sorted(
-            normalized,
-            key=lambda item: json.dumps(item, sort_keys=True, ensure_ascii=False),
-        )
-    if isinstance(value, str):
-        return " ".join(value.casefold().split())
-    return value
-
-
 def fingerprint(proposal: dict[str, Any]) -> str:
     identity = {
         "objective": proposal.get("objective", ""),
@@ -74,7 +57,8 @@ def fingerprint(proposal: dict[str, Any]) -> str:
         "material_inputs": proposal.get("material_inputs", {}),
     }
     canonical = json.dumps(
-        _normalize(identity),
+        identity,
+        allow_nan=False,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

@@ -61,7 +61,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 ./install.sh
 ```
 
-Restart Codex. The skill is copied to `~/.codex/skills/agent-call-governor`.
+Restart Codex. The skill is copied to `~/.codex/skills/agent-call-governor`. Both installers replace that skill directory cleanly and honor `CODEX_HOME` when it is set.
 
 Install the Python runtime when your application needs logging or enforcement:
 
@@ -105,6 +105,9 @@ proposal = CallProposal(
     quality_risk="medium",
 )
 
+def lookup_order(order_id: str) -> dict[str, str]:
+    return {"order_id": order_id, "status": "paid"}
+
 result = runtime.run(proposal, lookup_order, "42")
 ```
 
@@ -127,7 +130,9 @@ agent-call-governor-runtime export-jsonl \
   --output .governor/export.jsonl
 ```
 
-SQLite is authoritative; JSONL is an optional mirror or export. By default, events do **not** contain raw prompts, material inputs, tool arguments, tool results, transcripts, or exception messages. They contain fingerprints, lifecycle phases, decisions, progress, duration, and explicitly safe metadata.
+SQLite is authoritative; JSONL is an optional best-effort mirror or export. A mirror write failure is reported as a warning but never invalidates a committed SQLite decision. By default, events do **not** contain raw objectives/prompts, material inputs, tool arguments, tool results, transcripts, or exception messages. Objectives are stored as SHA-256 references; events otherwise contain fingerprints, lifecycle phases, decisions, progress, duration, and explicitly safe metadata.
+
+Pre-call history, policy evaluation, and the `started`/`blocked` reservation are committed in one SQLite transaction. Concurrent enforce calls therefore cannot both consume the same final budget slot or execute the same fingerprint.
 
 ## Use it in Codex
 
@@ -137,7 +142,7 @@ Invoke the skill directly:
 Use $agent-call-governor in balanced mode and complete this task with the minimum sufficient delegation.
 ```
 
-For automatic lifecycle recording, configure `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop` from [the Codex hook guide](agent-call-governor/references/codex-hooks.md) and [example hooks.json](examples/codex-hooks.json).
+For automatic lifecycle recording, configure `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop` from [the Codex hook guide](agent-call-governor/references/codex-hooks.md) and [example hooks.json](examples/codex-hooks.json). Policy history is scoped to a Codex turn when `turn_id` is available, so a long-lived thread does not exhaust one permanent budget; repeated delivery of the same host event is idempotent. Codex session, turn, tool-use, and agent IDs are stored only as SHA-256 references.
 
 Current Codex hook contracts do not provide a dependable pre-tool/subagent veto. The adapter therefore rejects `enforce` and returns only supported warning fields. Use `GovernedRuntime` when the call must be stopped before execution.
 
@@ -145,7 +150,7 @@ Current Codex hook contracts do not provide a dependable pre-tool/subagent veto.
 
 The optional adapter provides:
 
-- `GovernedRunner` for application-owned enforcement around complete `Runner.run` and `Runner.run_sync` workflows;
+- `GovernedRunner` for application-owned enforcement around complete `Runner.run` and `Runner.run_sync` workflows, with a fresh internal observer hook injected by default;
 - `build_function_tool_guardrail` for the SDK's supported `FunctionTool` input veto;
 - `build_run_hooks` for observe/warn lifecycle recording across agent, LLM, local tool, and handoff events.
 
@@ -153,7 +158,7 @@ See the [Agents SDK integration guide](agent-call-governor/references/openai-age
 
 ## Deterministic policy CLI
 
-The v0.1 proposal interface remains compatible:
+The v0.1 JSON proposal fields and CLI exit codes remain compatible:
 
 ```bash
 agent-call-governor evaluate examples/proposal.json
@@ -162,6 +167,10 @@ python agent-call-governor/scripts/governor.py evaluate examples/proposal.json
 ```
 
 Exit codes are `0` for allowed, `2` for policy denial, and `1` for invalid input. See the [proposal schema](agent-call-governor/references/proposal-schema.md) and [profile details](agent-call-governor/references/profiles.md).
+
+### Migrating fingerprint history from v0.1
+
+v0.2 intentionally preserves string case and list order in fingerprints. This prevents case-sensitive identifiers and ordered operations from being collapsed into a false duplicate. Fingerprint values produced by v0.1 may therefore differ even though the JSON interface is unchanged. Before enabling v0.2 enforcement, start a new governance session/scope or recompute stored history with v0.2; do not mix old and new fingerprint histories and expect cross-version duplicate matching.
 
 ## Profiles and quality floor
 
@@ -191,7 +200,7 @@ See [evaluation methodology](evals/README.md), [runtime replay results](evals/ru
 - Enforcement applies only where an application uses `GovernedRuntime`, `GovernedRunner`, or a supported SDK guardrail.
 - Codex hooks can observe and warn, but cannot currently provide the claimed universal veto.
 - The replay suite is deterministic and checked in; it is not a live production workload benchmark.
-- Fingerprints minimize stored content but are identifiers, not encryption. Review safe metadata before exporting a ledger.
+- Fingerprints and objective hash references minimize stored content but are identifiers, not encryption. Review safe metadata before exporting a ledger.
 - Input-only function-tool guardrails record a conservative `started` state because they cannot know the eventual result.
 
 ## Validate locally

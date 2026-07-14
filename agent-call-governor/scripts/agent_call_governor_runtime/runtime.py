@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 import warnings
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 
+from .ledger import DuplicateCallIdError
 from .models import (
     FAILURE_POLICIES,
     RUNTIME_MODES,
@@ -78,6 +80,79 @@ class GovernedRuntime:
             raise ValueError("call_id must be a non-empty string")
         call_id = call_id.strip()
         event_source = (source or self.source).strip()
+        atomic_transition = getattr(self.ledger, "atomic_transition", None)
+        if callable(atomic_transition):
+            decision = self._atomic_begin(
+                proposal,
+                call_id,
+                event_source,
+                atomic_transition,
+            )
+        else:
+            decision = self._non_atomic_begin(proposal, call_id, event_source)
+
+        if not decision.execution_allowed:
+            raise GovernanceBlocked(decision)
+
+        if self.mode == "warn" and not decision.policy_allowed:
+            try:
+                self.warning_handler(
+                    f"Agent Call Governor would block this call: {decision.reason} "
+                    f"(fingerprint={decision.fingerprint})"
+                )
+            except Exception:
+                pass
+        return CallHandle(proposal=proposal, call_id=call_id, decision=decision)
+
+    def _atomic_begin(
+        self,
+        proposal: CallProposal,
+        call_id: str,
+        event_source: str,
+        atomic_transition: Callable[..., RuntimeDecision],
+    ) -> RuntimeDecision:
+        def operation(history: list[dict[str, str]]) -> tuple[RuntimeDecision, list[CallEvent]]:
+            decision = self._decide(proposal, history=history)
+            decision_metadata = dict(decision.context)
+            events = [
+                self._event(
+                    proposal,
+                    call_id,
+                    decision,
+                    "proposed",
+                    source=event_source,
+                    metadata=decision_metadata,
+                )
+            ]
+            events.append(
+                self._event(
+                    proposal,
+                    call_id,
+                    decision,
+                    "started" if decision.execution_allowed else "blocked",
+                    source=event_source,
+                    metadata=decision_metadata,
+                )
+            )
+            return decision, events
+
+        try:
+            return atomic_transition(proposal.session_id, operation)
+        except DuplicateCallIdError:
+            raise
+        except Exception as exc:
+            if self.failure_policy == "fail-closed":
+                raise GovernanceInternalError(
+                    f"Agent Call Governor ledger failed during call reservation: {type(exc).__name__}"
+                ) from exc
+            return self._internal_decision(proposal, exc, fail_open=True)
+
+    def _non_atomic_begin(
+        self,
+        proposal: CallProposal,
+        call_id: str,
+        event_source: str,
+    ) -> RuntimeDecision:
         decision = self._decide(proposal)
         decision_metadata = dict(decision.context)
 
@@ -105,13 +180,7 @@ class GovernedRuntime:
                 ),
                 "blocked decision",
             )
-            raise GovernanceBlocked(decision)
-
-        if self.mode == "warn" and not decision.policy_allowed:
-            self.warning_handler(
-                f"Agent Call Governor would block this call: {decision.reason} "
-                f"(fingerprint={decision.fingerprint})"
-            )
+            return decision
 
         self._record(
             self._event(
@@ -124,7 +193,7 @@ class GovernedRuntime:
             ),
             "call start",
         )
-        return CallHandle(proposal=proposal, call_id=call_id, decision=decision)
+        return decision
 
     def complete(
         self,
@@ -146,6 +215,53 @@ class GovernedRuntime:
                 metadata=dict(metadata or {}),
             ),
             "call completion",
+        )
+
+    async def begin_async(
+        self,
+        proposal: CallProposal,
+        *,
+        call_id: str | None = None,
+        source: str | None = None,
+    ) -> CallHandle:
+        """Reserve a call without blocking the event loop or leaking on cancellation."""
+        begin_task = asyncio.create_task(
+            asyncio.to_thread(self.begin, proposal, call_id=call_id, source=source)
+        )
+        try:
+            return await asyncio.shield(begin_task)
+        except asyncio.CancelledError as cancellation:
+            try:
+                handle = await _await_ignoring_cancellations(begin_task)
+            except Exception:
+                pass
+            else:
+                try:
+                    await _to_thread_resilient(
+                        self.cancel,
+                        handle,
+                        metadata={"cancelled_before_execution": True},
+                        source=source,
+                    )
+                except Exception as recording_error:
+                    if hasattr(cancellation, "add_note"):
+                        cancellation.add_note(str(recording_error))
+            raise
+
+    async def complete_async(
+        self,
+        handle: CallHandle,
+        *,
+        progress: str = "material_progress",
+        metadata: Mapping[str, Any] | None = None,
+        source: str | None = None,
+    ) -> None:
+        await _to_thread_resilient(
+            self.complete,
+            handle,
+            progress=progress,
+            metadata=metadata,
+            source=source,
         )
 
     def fail(
@@ -170,6 +286,29 @@ class GovernedRuntime:
                 error_type=type(error).__name__,
             ),
             "call failure",
+        )
+
+    def cancel(
+        self,
+        handle: CallHandle,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        source: str | None = None,
+    ) -> None:
+        """Release a reservation when async cancellation wins before execution."""
+        self._record(
+            self._event(
+                handle.proposal,
+                handle.call_id,
+                handle.decision,
+                "cancelled",
+                progress="no_progress",
+                duration_ms=_duration_ms(handle),
+                source=source or self.source,
+                metadata=dict(metadata or {}),
+                error_type="CancelledError",
+            ),
+            "pre-execution cancellation",
         )
 
     def run(
@@ -199,23 +338,46 @@ class GovernedRuntime:
         result_metadata: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> T:
-        handle = self.begin(proposal)
+        handle = await self.begin_async(proposal)
         try:
             result = await func(*args, **kwargs)
         except BaseException as exc:
-            self._record_failure_without_masking(handle, exc)
+            await _to_thread_resilient(self._record_failure_without_masking, handle, exc)
             raise
-        self.complete(handle, progress=progress, metadata=result_metadata)
+        await self.complete_async(
+            handle,
+            progress=progress,
+            metadata=result_metadata,
+        )
         return result
 
-    def _decide(self, proposal: CallProposal) -> RuntimeDecision:
+    def _decide(
+        self,
+        proposal: CallProposal,
+        *,
+        history: list[dict[str, str]] | None = None,
+    ) -> RuntimeDecision:
         try:
-            history = self.ledger.history(proposal.session_id)
+            if history is None:
+                history = self.ledger.history(proposal.session_id)
             raw = self.policy_evaluator(proposal.to_policy_document(history))
-            policy_allowed = bool(raw["allowed"])
-            reason = str(raw["reason"])
-            policy_fp = str(raw["fingerprint"])
+            if not isinstance(raw, Mapping):
+                raise TypeError("policy result must be an object")
+            policy_allowed = raw.get("allowed")
+            if type(policy_allowed) is not bool:
+                raise TypeError("policy result allowed must be a boolean")
+            reason = raw.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise TypeError("policy result reason must be a non-empty string")
+            reason = reason.strip()
+            policy_fp = raw.get("fingerprint")
+            if not isinstance(policy_fp, str) or policy_fp != proposal.fingerprint:
+                raise ValueError("policy fingerprint must match the canonical proposal fingerprint")
             remaining = raw.get("remaining_after_call")
+            if remaining is not None and (
+                type(remaining) is not int or remaining < 0
+            ):
+                raise TypeError("policy result remaining_after_call must be a non-negative integer")
             context = {
                 key: value
                 for key, value in raw.items()
@@ -232,13 +394,22 @@ class GovernedRuntime:
             )
         except Exception as exc:
             fail_open = self.failure_policy == "fail-open"
-            return RuntimeDecision(
-                policy_allowed=False,
-                execution_allowed=fail_open,
-                reason="internal_error_fail_open" if fail_open else "internal_error_fail_closed",
-                fingerprint=proposal.fingerprint,
-                context={"internal_error_type": type(exc).__name__},
-            )
+            return self._internal_decision(proposal, exc, fail_open=fail_open)
+
+    @staticmethod
+    def _internal_decision(
+        proposal: CallProposal,
+        error: BaseException,
+        *,
+        fail_open: bool,
+    ) -> RuntimeDecision:
+        return RuntimeDecision(
+            policy_allowed=False,
+            execution_allowed=fail_open,
+            reason="internal_error_fail_open" if fail_open else "internal_error_fail_closed",
+            fingerprint=proposal.fingerprint,
+            context={"internal_error_type": type(error).__name__},
+        )
 
     def _event(
         self,
@@ -300,3 +471,27 @@ class GovernedRuntime:
 
 def _duration_ms(handle: CallHandle) -> float:
     return max((time.perf_counter_ns() - handle.started_at_ns) / 1_000_000, 0.0)
+
+
+async def _to_thread_resilient(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+    """Finish authoritative recording even if the awaiting task is cancelled."""
+    task = asyncio.create_task(asyncio.to_thread(func, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancellation:
+        try:
+            await _await_ignoring_cancellations(task)
+        except Exception as recording_error:
+            if hasattr(cancellation, "add_note"):
+                cancellation.add_note(str(recording_error))
+        raise
+
+
+async def _await_ignoring_cancellations(task: asyncio.Task[T]) -> T:
+    """Wait for a protected task through any number of outer cancellations."""
+    while True:
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.done():
+                return task.result()

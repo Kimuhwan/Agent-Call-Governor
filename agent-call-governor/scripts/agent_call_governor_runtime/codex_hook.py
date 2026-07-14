@@ -11,7 +11,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .ledger import CallLedger
+from .ledger import CallLedger, DuplicateCallIdError
 from .models import PROGRESS_VALUES, CallEvent, CallProposal
 from .runtime import GovernedRuntime, GovernanceInternalError
 
@@ -39,22 +39,29 @@ def handle_codex_hook(
     event_name = _optional_string(payload.get("hook_event_name"))
     if event_name not in _SUPPORTED_EVENTS:
         return None
-    session_id = _required_string(payload, "session_id")
+    host_session_id = _required_string(payload, "session_id")
+    call_id = _call_id(payload, event_name, host_session_id)
+    session_id = _governance_scope_id(payload, host_session_id, call_id)
 
     if event_name in _START_EVENTS:
-        proposal, call_id = _proposal_for_start(payload, event_name, session_id)
-        handle = runtime.begin(proposal, call_id=call_id, source="codex-hook")
+        proposal = _proposal_for_start(payload, event_name, session_id, call_id)
+        existing = runtime.ledger.latest_event(session_id, call_id)
+        if existing is not None:
+            return _replayed_start_output(existing, proposal, runtime.mode)
+        try:
+            handle = runtime.begin(proposal, call_id=call_id, source="codex-hook")
+        except DuplicateCallIdError:
+            # Another hook process may have committed the same host event after
+            # our precheck. Re-read the authoritative decision and treat an
+            # identical fingerprint as at-least-once delivery.
+            existing = runtime.ledger.latest_event(session_id, call_id)
+            if existing is None:
+                raise
+            return _replayed_start_output(existing, proposal, runtime.mode)
         if runtime.mode == "warn" and not handle.decision.policy_allowed:
-            return {
-                "systemMessage": (
-                    "Agent Call Governor warning: this call would be blocked by the active "
-                    f"policy ({handle.decision.reason}). Codex hooks are observe/warn only; "
-                    "the call will continue."
-                )
-            }
+            return _warning_output(handle.decision.reason)
         return None
 
-    call_id = _call_id(payload, event_name, session_id)
     started = runtime.ledger.latest_event(session_id, call_id)
     if started is None or started.phase not in {"proposed", "started"}:
         return None
@@ -66,7 +73,8 @@ def _proposal_for_start(
     payload: Mapping[str, Any],
     event_name: str,
     session_id: str,
-) -> tuple[CallProposal, str]:
+    call_id: str,
+) -> CallProposal:
     if event_name == "PreToolUse":
         route = _required_string(payload, "tool_name")
         input_value = payload.get("tool_input", {})
@@ -85,7 +93,12 @@ def _proposal_for_start(
         capability_gap = "Codex selected delegated agent work"
         expected = f"A result from the {agent_type} subagent"
         stop_condition = "The subagent stops"
-        material_inputs = {"agent_type": agent_type}
+        # The hook does not expose the delegated task body. Use the unique host
+        # invocation identity to avoid merging legitimate same-type subagents.
+        material_inputs = {
+            "agent_type": agent_type,
+            "invocation_sha256": hashlib.sha256(call_id.encode("utf-8")).hexdigest(),
+        }
 
     metadata = _safe_metadata(payload, event_name)
     proposal = CallProposal(
@@ -101,7 +114,42 @@ def _proposal_for_start(
         quality_risk=_safe_choice(payload.get("governor_quality_risk"), {"low", "medium", "high"}, "medium"),
         metadata=metadata,
     )
-    return proposal, _call_id(payload, event_name, session_id)
+    return proposal
+
+
+def _governance_scope_id(
+    payload: Mapping[str, Any],
+    host_session_id: str,
+    call_id: str,
+) -> str:
+    turn_id = _optional_string(payload.get("turn_id"))
+    session_ref = _hash_identifier(host_session_id)
+    if turn_id is not None:
+        return f"codex:session:{session_ref}:turn:{_hash_identifier(turn_id)}"
+    # Older payloads without turn identity get a call-local scope. This keeps
+    # lifecycle accounting without carrying budgets across unrelated tasks.
+    return f"codex:session:{session_ref}:call:{call_id}"
+
+
+def _warning_output(reason: str) -> dict[str, str]:
+    return {
+        "systemMessage": (
+            "Agent Call Governor warning: this call would be blocked by the active "
+            f"policy ({reason}). Codex hooks are observe/warn only; the call will continue."
+        )
+    }
+
+
+def _replayed_start_output(
+    existing: CallEvent,
+    proposal: CallProposal,
+    mode: str,
+) -> dict[str, str] | None:
+    if existing.fingerprint != proposal.fingerprint:
+        raise ValueError("Codex hook call ID was reused with different material inputs")
+    if mode == "warn" and not existing.policy_allowed:
+        return _warning_output(existing.decision_reason or "policy_rejected")
+    return None
 
 
 def _call_id(payload: Mapping[str, Any], event_name: str, session_id: str) -> str:
@@ -109,7 +157,7 @@ def _call_id(payload: Mapping[str, Any], event_name: str, session_id: str) -> st
     supplied = _optional_string(payload.get("agent_id" if is_agent else "tool_use_id"))
     prefix = "codex-agent" if is_agent else "codex-tool"
     if supplied is not None:
-        return f"{prefix}:{supplied}"
+        return f"{prefix}:host:{_hash_identifier(supplied)}"
 
     route_key = "agent_type" if is_agent else "tool_name"
     route = _required_string(payload, route_key)
@@ -154,7 +202,11 @@ def _append_terminal(
         ),
     )
     try:
-        runtime.ledger.append(terminal)
+        append_terminal = getattr(runtime.ledger, "append_terminal_if_open", None)
+        if callable(append_terminal):
+            append_terminal(terminal)
+        else:
+            runtime.ledger.append(terminal)
     except Exception as exc:
         if runtime.failure_policy == "fail-closed":
             raise GovernanceInternalError(
@@ -164,7 +216,13 @@ def _append_terminal(
 
 def _safe_metadata(payload: Mapping[str, Any], event_name: str) -> dict[str, str]:
     metadata = {"hook_event_name": event_name}
-    for key in ("turn_id", "tool_name", "agent_type", "model", "permission_mode"):
+    host_session_id = _optional_string(payload.get("session_id"))
+    if host_session_id is not None:
+        metadata["codex_session_sha256"] = _hash_identifier(host_session_id)
+    turn_id = _optional_string(payload.get("turn_id"))
+    if turn_id is not None:
+        metadata["codex_turn_sha256"] = _hash_identifier(turn_id)
+    for key in ("tool_name", "agent_type", "model", "permission_mode"):
         value = _optional_string(payload.get(key))
         if value is not None:
             metadata[key] = value
@@ -177,6 +235,10 @@ def _hash_json(value: Any) -> str:
     except (TypeError, ValueError) as exc:
         raise ValueError("tool_input must be JSON-compatible") from exc
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _hash_identifier(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _required_string(payload: Mapping[str, Any], key: str) -> str:

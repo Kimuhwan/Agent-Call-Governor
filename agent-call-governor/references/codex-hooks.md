@@ -9,6 +9,14 @@ The adapter stores policy and lifecycle metadata in SQLite and can mirror it to
 JSONL. It hashes `tool_input` for duplicate detection and does not store raw tool
 arguments, tool results, transcripts, or the last assistant message.
 
+Policy budgets and duplicate history use hashed session and turn references when
+Codex supplies a turn ID. Original `session_id`, `turn_id`, `tool_use_id`, and
+`agent_id` values are not persisted; SHA-256 references retain correlation.
+Payloads without a turn ID fall back to a call-local scope, favoring quality over
+carrying a stale budget across unrelated tasks. Re-delivery of the same start or
+terminal host ID is idempotent; a real second call must have a new host ID and is
+then evaluated by fingerprint.
+
 ## Capability boundary
 
 Use `--mode observe` first, then `--mode warn` after reviewing the ledger.

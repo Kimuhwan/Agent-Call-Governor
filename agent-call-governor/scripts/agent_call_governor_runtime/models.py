@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -19,7 +20,7 @@ from .policy import (
 )
 
 
-EVENT_PHASES = {"proposed", "blocked", "started", "completed", "failed"}
+EVENT_PHASES = {"proposed", "blocked", "started", "completed", "failed", "cancelled"}
 RUNTIME_MODES = {"observe", "warn", "enforce"}
 FAILURE_POLICIES = {"fail-open", "fail-closed"}
 
@@ -34,6 +35,19 @@ def _choice(value: str, allowed: set[str], field_name: str) -> str:
     if value not in allowed:
         raise ValueError(f"{field_name} must be one of: {', '.join(sorted(allowed))}")
     return value
+
+
+def _objective_reference(value: str) -> str:
+    """Return a stable non-plaintext reference for an event objective."""
+    objective = _nonempty(value, "objective")
+    if (
+        objective.startswith("sha256:")
+        and len(objective) == 71
+        and all(character in "0123456789abcdef" for character in objective[7:])
+    ):
+        return objective
+    digest = hashlib.sha256(objective.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
 
 
 def _json_object(value: Mapping[str, Any], field_name: str) -> dict[str, Any]:
@@ -188,6 +202,7 @@ class CallEvent:
             "source",
         ):
             object.__setattr__(self, name, _nonempty(getattr(self, name), name))
+        object.__setattr__(self, "objective", _objective_reference(self.objective))
         object.__setattr__(self, "phase", _choice(self.phase, EVENT_PHASES, "phase"))
         object.__setattr__(self, "budget_kind", _choice(self.budget_kind, BUDGET_KINDS, "budget_kind"))
         object.__setattr__(self, "profile", _choice(self.profile, PROFILE_NAMES, "profile"))

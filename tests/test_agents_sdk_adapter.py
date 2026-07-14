@@ -38,13 +38,17 @@ class FakeRunner:
     def __init__(self) -> None:
         self.sync_calls = 0
         self.async_calls = 0
+        self.sync_kwargs: dict[str, object] = {}
+        self.async_kwargs: dict[str, object] = {}
 
     def run_sync(self, starting_agent: object, input: object, **kwargs: object) -> str:
         self.sync_calls += 1
+        self.sync_kwargs = dict(kwargs)
         return "sync-result"
 
     async def run(self, starting_agent: object, input: object, **kwargs: object) -> str:
         self.async_calls += 1
+        self.async_kwargs = dict(kwargs)
         return "async-result"
 
 
@@ -83,7 +87,7 @@ class AgentsSDKAdapterTests(unittest.TestCase):
     def test_governed_runner_wraps_sync_and_async_sdk_entrypoints(self) -> None:
         fake = FakeRunner()
         runtime = GovernedRuntime(self.ledger, mode="observe")
-        runner = GovernedRunner(runtime, runner=fake)
+        runner = GovernedRunner(runtime, runner=fake, observe_internal_calls=False)
 
         self.assertEqual(runner.run_sync(proposal("sync"), object(), "secret input"), "sync-result")
         self.assertEqual(
@@ -98,10 +102,33 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         persisted = (Path(self.tempdir.name) / "events.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("secret input", persisted)
 
+    def test_governed_runner_injects_fresh_internal_observer_hooks(self) -> None:
+        fake = FakeRunner()
+        runtime = GovernedRuntime(self.ledger, mode="enforce")
+        built_for_modes = []
+        sentinels = []
+
+        def hooks_factory(observation_runtime):
+            built_for_modes.append(observation_runtime.mode)
+            hook = object()
+            sentinels.append(hook)
+            return hook
+
+        runner = GovernedRunner(
+            runtime,
+            runner=fake,
+            run_hooks_factory=hooks_factory,
+        )
+
+        self.assertEqual(runner.run_sync(proposal("injected"), object(), "input"), "sync-result")
+
+        self.assertEqual(built_for_modes, ["observe"])
+        self.assertIs(fake.sync_kwargs["hooks"], sentinels[0])
+
     def test_governed_runner_enforces_before_invoking_sdk(self) -> None:
         fake = FakeRunner()
         runtime = GovernedRuntime(self.ledger, mode="enforce")
-        runner = GovernedRunner(runtime, runner=fake)
+        runner = GovernedRunner(runtime, runner=fake, observe_internal_calls=False)
         call = proposal()
 
         self.assertEqual(runner.run_sync(call, object(), "first"), "sync-result")
@@ -178,12 +205,19 @@ class AgentsSDKAdapterTests(unittest.TestCase):
             context=None,
             tool_name="lookup_order",
             tool_call_id="tool-call-1",
-            tool_arguments='{"email":"secret@example.com"}',
+            tool_arguments='{"email":"secret@example.com","limit":1}',
+        )
+        reordered_context = ToolContext(
+            context=None,
+            tool_name="lookup_order",
+            tool_call_id="tool-call-2",
+            tool_arguments='{ "limit": 1, "email": "secret@example.com" }',
         )
         data = agents.ToolInputGuardrailData(context=context, agent=agent)
+        reordered_data = agents.ToolInputGuardrailData(context=reordered_context, agent=agent)
 
         allowed = asyncio.run(guardrail.run(data))
-        blocked = asyncio.run(guardrail.run(data))
+        blocked = asyncio.run(guardrail.run(reordered_data))
 
         self.assertEqual(allowed.behavior["type"], "allow")
         self.assertEqual(blocked.behavior["type"], "reject_content")
@@ -193,6 +227,42 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         )
         persisted = (Path(self.tempdir.name) / "events.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("secret@example.com", persisted)
+
+    @unittest.skipUnless(SDK_AVAILABLE, "openai-agents optional extra is not installed")
+    def test_function_tool_guardrail_requires_explicit_workflow_scope(self) -> None:
+        runtime = GovernedRuntime(self.ledger, mode="enforce")
+
+        with self.assertRaisesRegex(ValueError, "per-workflow session_id"):
+            build_function_tool_guardrail(runtime)
+
+    @unittest.skipUnless(SDK_AVAILABLE, "openai-agents optional extra is not installed")
+    def test_function_tool_guardrail_session_factory_isolates_workflows(self) -> None:
+        import agents
+        from agents.tool_context import ToolContext
+
+        runtime = GovernedRuntime(self.ledger, mode="enforce")
+        guardrail = build_function_tool_guardrail(
+            runtime,
+            session_id_factory=lambda data: f"guardrail:{data.context.context}",
+        )
+        agent = agents.Agent(name="support")
+
+        def data_for(workflow, call_id):
+            context = ToolContext(
+                context=workflow,
+                tool_name="lookup_order",
+                tool_call_id=call_id,
+                tool_arguments='{"order":"same-material"}',
+            )
+            return agents.ToolInputGuardrailData(context=context, agent=agent)
+
+        first = asyncio.run(guardrail.run(data_for("workflow-a", "call-a")))
+        second = asyncio.run(guardrail.run(data_for("workflow-b", "call-b")))
+
+        self.assertEqual(first.behavior["type"], "allow")
+        self.assertEqual(second.behavior["type"], "allow")
+        self.assertEqual(len(self.ledger.history("guardrail:workflow-a")), 1)
+        self.assertEqual(len(self.ledger.history("guardrail:workflow-b")), 1)
 
     @unittest.skipUnless(SDK_AVAILABLE, "openai-agents optional extra is not installed")
     def test_run_hooks_reject_enforce_mode_in_favor_of_guardrails(self) -> None:
@@ -218,6 +288,52 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         events = self.ledger.events("no-tool-id")
         self.assertEqual([event.phase for event in events], ["proposed", "started", "completed"])
         self.assertNotIn("private result", json.dumps([event.to_dict() for event in events]))
+
+    @unittest.skipUnless(SDK_AVAILABLE, "openai-agents optional extra is not installed")
+    def test_run_hooks_hash_real_llm_inputs_and_do_not_merge_agent_turns(self) -> None:
+        import agents
+
+        warnings_seen = []
+        runtime = GovernedRuntime(
+            self.ledger,
+            mode="warn",
+            warning_handler=warnings_seen.append,
+        )
+        hooks = build_run_hooks(runtime, session_id="identity-session")
+        agent = agents.Agent(name="triage")
+        context = SimpleNamespace()
+
+        async def exercise() -> None:
+            await hooks.on_agent_start(context, agent)
+            await hooks.on_agent_end(context, agent, "first private output")
+            await hooks.on_agent_start(context, agent)
+            await hooks.on_agent_end(context, agent, "second private output")
+            await hooks.on_llm_start(
+                context,
+                agent,
+                "private system prompt",
+                [{"content": "first private model input"}],
+            )
+            await hooks.on_llm_end(context, agent, object())
+            await hooks.on_llm_start(
+                context,
+                agent,
+                "private system prompt",
+                [{"content": "second private model input"}],
+            )
+            await hooks.on_llm_end(context, agent, object())
+
+        asyncio.run(exercise())
+
+        started = [event for event in self.ledger.events("identity-session") if event.phase == "started"]
+        agent_fingerprints = [event.fingerprint for event in started if event.route == "agent:triage"]
+        llm_fingerprints = [event.fingerprint for event in started if event.route == "llm:triage"]
+        self.assertEqual(len(set(agent_fingerprints)), 2)
+        self.assertEqual(len(set(llm_fingerprints)), 2)
+        self.assertEqual(warnings_seen, [])
+        serialized = json.dumps([event.to_dict() for event in started])
+        self.assertNotIn("private system prompt", serialized)
+        self.assertNotIn("private model input", serialized)
 
 
 if __name__ == "__main__":

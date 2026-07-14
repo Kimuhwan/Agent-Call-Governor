@@ -89,7 +89,7 @@ Allow at most one handoff. Allow no identical retry. Raise a budget for quality-
 
 ## Block duplicates
 
-Normalize a proposed call from its objective, route or capability, and material inputs. Exclude timestamps, generated IDs, ordering that does not change meaning, and wording-only differences.
+Normalize a proposed call from its objective, route or capability, and material inputs. Exclude timestamps, generated IDs, ordering that is explicitly known not to change meaning, and wording-only differences. In the generic deterministic gate, preserve string case and list order by default; an application may pre-normalize only fields whose schema explicitly declares them case-insensitive or unordered.
 
 Reject a proposed call when:
 
@@ -105,7 +105,7 @@ Apply duplicate prevention before mandatory exceptions. An explicit request does
 
 For complex or long-running workflows, run `python scripts/governor.py evaluate proposal.json` to apply deterministic risk floors, budget, progress, and duplicate checks. Read [references/proposal-schema.md](references/proposal-schema.md) when preparing the JSON input. Do not run the script for a simple decision that is already obvious.
 
-When a runtime ledger is already in use, treat its SQLite history as authoritative. JSONL is an optional audit mirror. Do not put raw prompts, material inputs, tool arguments, results, transcripts, or exception messages into event metadata; store only fingerprints and explicitly safe operational fields.
+When a runtime ledger is already in use, treat its SQLite history as authoritative. JSONL is an optional best-effort audit mirror. Do not put raw objectives/prompts, material inputs, tool arguments, results, transcripts, or exception messages into events or event metadata; store objective hash references, fingerprints, and explicitly safe operational fields only.
 
 ## Gate on progress
 

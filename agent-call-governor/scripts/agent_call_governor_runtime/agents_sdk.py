@@ -35,12 +35,21 @@ class SDKHookCall:
 class GovernedRunner:
     """Application-owned enforcement around complete Agents SDK runs."""
 
-    def __init__(self, runtime: GovernedRuntime, *, runner: Any | None = None) -> None:
+    def __init__(
+        self,
+        runtime: GovernedRuntime,
+        *,
+        runner: Any | None = None,
+        observe_internal_calls: bool = True,
+        run_hooks_factory: Callable[[GovernedRuntime], Any] | None = None,
+    ) -> None:
         self.runtime = runtime
         if runner is None:
             agents, _lifecycle = _load_agents()
             runner = agents.Runner()
         self.runner = runner
+        self.observe_internal_calls = observe_internal_calls
+        self.run_hooks_factory = run_hooks_factory or build_run_hooks
 
     async def run(
         self,
@@ -50,7 +59,8 @@ class GovernedRunner:
         **kwargs: Any,
     ) -> Any:
         async def invoke() -> Any:
-            return await self.runner.run(starting_agent, input, **kwargs)
+            run_kwargs = self._with_observer_hooks(kwargs)
+            return await self.runner.run(starting_agent, input, **run_kwargs)
 
         return await self.runtime.run_async(proposal, invoke)
 
@@ -63,8 +73,29 @@ class GovernedRunner:
     ) -> Any:
         return self.runtime.run(
             proposal,
-            lambda: self.runner.run_sync(starting_agent, input, **kwargs),
+            lambda: self.runner.run_sync(
+                starting_agent,
+                input,
+                **self._with_observer_hooks(kwargs),
+            ),
         )
+
+    def _with_observer_hooks(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        run_kwargs = dict(kwargs)
+        if not self.observe_internal_calls or "hooks" in run_kwargs:
+            return run_kwargs
+        hook_runtime = self.runtime
+        if hook_runtime.mode == "enforce":
+            hook_runtime = GovernedRuntime(
+                hook_runtime.ledger,
+                mode="observe",
+                failure_policy=hook_runtime.failure_policy,
+                policy_evaluator=hook_runtime.policy_evaluator,
+                warning_handler=hook_runtime.warning_handler,
+                source="agents-sdk-hooks",
+            )
+        run_kwargs["hooks"] = self.run_hooks_factory(hook_runtime)
+        return run_kwargs
 
 
 def build_run_hooks(
@@ -85,7 +116,11 @@ def build_run_hooks(
             "function-tool guardrail for enforcement"
         )
     _agents, lifecycle = _load_agents()
-    hooks_session_id = _nonempty(session_id, "session_id") if session_id else f"agents-sdk:{uuid.uuid4()}"
+    hooks_session_id = (
+        _nonempty(session_id, "session_id")
+        if session_id is not None
+        else f"agents-sdk:{uuid.uuid4()}"
+    )
     factory = proposal_factory or _default_hook_proposal
     RunHooksBase = lifecycle.RunHooksBase
 
@@ -103,10 +138,12 @@ def build_run_hooks(
                 call_id=f"agents-sdk-agent:{uuid.uuid4()}",
                 route=f"agent:{name}",
                 agent_name=name,
-                material_fingerprint=_hash_text(name),
+                # Agent lifecycle starts do not expose a stable call input. A
+                # nonce avoids falsely merging legitimate repeated turns.
+                material_fingerprint=uuid.uuid4().hex,
                 metadata={"sdk_kind": "agent", "sdk_agent": name},
             )
-            _push(self._agent_handles, id(agent), self._begin(call))
+            _push(self._agent_handles, id(agent), await self._begin(call))
 
         async def on_agent_end(
             self,
@@ -116,7 +153,7 @@ def build_run_hooks(
         ) -> None:
             handle = _pop(self._agent_handles, id(agent))
             if handle is not None:
-                runtime.complete(
+                await runtime.complete_async(
                     handle,
                     progress="material_progress",
                     metadata={"sdk_event": "agent_end"},
@@ -131,7 +168,7 @@ def build_run_hooks(
         ) -> None:
             handle = _pop(self._agent_handles, id(from_agent))
             if handle is not None:
-                runtime.complete(
+                await runtime.complete_async(
                     handle,
                     progress="material_progress",
                     metadata={
@@ -150,10 +187,9 @@ def build_run_hooks(
             input_items: list[Any],
         ) -> None:
             name = _agent_name(agent)
-            shape = {
-                "has_system_prompt": bool(system_prompt),
-                "input_count": len(input_items),
-                "input_types": [type(item).__name__ for item in input_items],
+            transient_input = {
+                "system_prompt": system_prompt,
+                "input_items": input_items,
             }
             call = SDKHookCall(
                 kind="llm",
@@ -161,10 +197,10 @@ def build_run_hooks(
                 call_id=f"agents-sdk-llm:{uuid.uuid4()}",
                 route=f"llm:{name}",
                 agent_name=name,
-                material_fingerprint=_hash_json(shape),
+                material_fingerprint=_hash_json(transient_input),
                 metadata={"sdk_kind": "llm", "sdk_agent": name},
             )
-            _push(self._llm_handles, id(agent), self._begin(call))
+            _push(self._llm_handles, id(agent), await self._begin(call))
 
         async def on_llm_end(
             self,
@@ -174,7 +210,7 @@ def build_run_hooks(
         ) -> None:
             handle = _pop(self._llm_handles, id(agent))
             if handle is not None:
-                runtime.complete(
+                await runtime.complete_async(
                     handle,
                     progress="material_progress",
                     metadata={"sdk_event": "llm_end"},
@@ -192,7 +228,9 @@ def build_run_hooks(
             call_id = f"agents-sdk-tool:{supplied_id or uuid.uuid4()}"
             storage_key = _tool_storage_key(supplied_id, agent, tool_name)
             arguments = getattr(context, "tool_arguments", None)
-            argument_fingerprint = _hash_text(arguments) if isinstance(arguments, str) else None
+            argument_fingerprint = (
+                _hash_tool_arguments(arguments) if isinstance(arguments, str) else uuid.uuid4().hex
+            )
             call = SDKHookCall(
                 kind="tool",
                 session_id=hooks_session_id,
@@ -206,7 +244,7 @@ def build_run_hooks(
                     "sdk_tool": tool_name,
                 },
             )
-            _push(self._tool_handles, storage_key, self._begin(call))
+            _push(self._tool_handles, storage_key, await self._begin(call))
 
         async def on_tool_end(
             self,
@@ -220,18 +258,22 @@ def build_run_hooks(
             storage_key = _tool_storage_key(supplied_id, agent, tool_name)
             handle = _pop(self._tool_handles, storage_key)
             if handle is not None:
-                runtime.complete(
+                await runtime.complete_async(
                     handle,
                     progress="material_progress",
                     metadata={"sdk_event": "tool_end"},
                     source="agents-sdk-hooks",
                 )
 
-        def _begin(self, call: SDKHookCall) -> CallHandle:
+        async def _begin(self, call: SDKHookCall) -> CallHandle:
             candidate = factory(call)
             if not isinstance(candidate, CallProposal):
                 raise TypeError("proposal_factory must return CallProposal")
-            return runtime.begin(candidate, call_id=call.call_id, source="agents-sdk-hooks")
+            return await runtime.begin_async(
+                candidate,
+                call_id=call.call_id,
+                source="agents-sdk-hooks",
+            )
 
     return GovernorRunHooks()
 
@@ -241,28 +283,40 @@ def build_function_tool_guardrail(
     proposal_factory: Callable[[Any], CallProposal] | None = None,
     *,
     session_id: str | None = None,
+    session_id_factory: Callable[[Any], str] | None = None,
     blocked_behavior: str = "reject_content",
 ) -> Any:
     """Build a supported FunctionTool input guardrail backed by the governor."""
     if blocked_behavior not in {"reject_content", "raise_exception"}:
         raise ValueError("blocked_behavior must be reject_content or raise_exception")
+    if session_id is not None and session_id_factory is not None:
+        raise ValueError("provide session_id or session_id_factory, not both")
+    if proposal_factory is None and session_id is None and session_id_factory is None:
+        raise ValueError(
+            "provide a per-workflow session_id or session_id_factory for the default guardrail proposal"
+        )
     agents, _lifecycle = _load_agents()
-    guardrail_session_id = (
-        _nonempty(session_id, "session_id") if session_id else f"agents-sdk-guardrail:{uuid.uuid4()}"
-    )
+    fixed_session_id = _nonempty(session_id, "session_id") if session_id is not None else None
 
     async def govern_tool_input(data: Any) -> Any:
         if proposal_factory is None:
-            candidate = _default_guardrail_proposal(data, guardrail_session_id)
+            resolved_session_id = fixed_session_id
+            if resolved_session_id is None and session_id_factory is not None:
+                resolved_session_id = _nonempty(session_id_factory(data), "session_id_factory result")
+            candidate = _default_guardrail_proposal(data, resolved_session_id or "")
         else:
             candidate = proposal_factory(data)
         if not isinstance(candidate, CallProposal):
             raise TypeError("proposal_factory must return CallProposal")
         tool_context = data.context
         supplied_id = _optional_string(getattr(tool_context, "tool_call_id", None))
-        call_id = f"agents-sdk-guardrail:{supplied_id or uuid.uuid4()}"
+        call_id = f"agents-sdk-guardrail:{supplied_id or 'no-host-id'}:{uuid.uuid4()}"
         try:
-            handle = runtime.begin(candidate, call_id=call_id, source="agents-sdk-guardrail")
+            handle = await runtime.begin_async(
+                candidate,
+                call_id=call_id,
+                source="agents-sdk-guardrail",
+            )
         except GovernanceBlocked as exc:
             info = {
                 "governor_allowed": False,
@@ -324,7 +378,9 @@ def _default_guardrail_proposal(data: Any, session_id: str) -> CallProposal:
         stop_condition="The function tool returns",
         material_inputs={
             "tool_name": tool_name,
-            "arguments_sha256": _hash_text(arguments if isinstance(arguments, str) else ""),
+            "arguments_sha256": (
+                _hash_tool_arguments(arguments) if isinstance(arguments, str) else uuid.uuid4().hex
+            ),
         },
         budget_kind="direct-tool",
         profile="balanced",
@@ -397,9 +453,38 @@ def _hash_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _hash_tool_arguments(value: str) -> str:
+    """Canonicalize JSON object key order while preserving value semantics."""
+    try:
+        decoded = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return _hash_text(value)
+    return _hash_json(decoded)
+
+
 def _hash_json(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+        default=_json_fallback,
+    )
     return _hash_text(encoded)
+
+
+def _json_fallback(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return model_dump(mode="json")
+        except TypeError:
+            return model_dump()
+    return {
+        "type": f"{type(value).__module__}.{type(value).__qualname__}",
+        "repr": repr(value),
+    }
 
 
 def _optional_string(value: Any) -> str | None:

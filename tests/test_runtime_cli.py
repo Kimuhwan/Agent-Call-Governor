@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -84,6 +85,19 @@ class RuntimeCLITests(unittest.TestCase):
         self.assertIn("Agent Call Governor runtime report", result.stdout)
         self.assertIn("Would block but executed: 1", result.stdout)
 
+    def test_report_does_not_count_cancelled_reservation_as_executed(self) -> None:
+        runtime = GovernedRuntime(self.ledger, mode="enforce")
+        handle = runtime.begin(proposal())
+        runtime.cancel(handle, metadata={"cancelled_before_execution": True})
+
+        result = self._run_cli("report", "--db", str(self.db_path), "--json")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["executed"], 0)
+        self.assertEqual(report["would_block_but_executed"], 0)
+        self.assertEqual(report["final_states"]["cancelled"], 1)
+
     def test_export_jsonl_writes_sanitized_events(self) -> None:
         self._seed()
         output_path = self.root / "export" / "events.jsonl"
@@ -139,7 +153,14 @@ class RuntimeCLITests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
         self.assertEqual(
-            [event.phase for event in CallLedger(hook_db).events("session-1")],
+            [
+                event.phase
+                for event in CallLedger(hook_db).events(
+                    "codex:session:"
+                    f"{hashlib.sha256(b'session-1').hexdigest()}:turn:"
+                    f"{hashlib.sha256(b'turn-1').hexdigest()}"
+                )
+            ],
             ["proposed", "started"],
         )
 

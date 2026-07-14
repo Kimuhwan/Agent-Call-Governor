@@ -26,15 +26,15 @@ Move the current deterministic `evaluate` and `fingerprint` functions into the p
 
 ### Policy core
 
-`policy.py` owns profiles, risk floors, proposal validation, fingerprints, and decisions. It preserves the v0.1.0 JSON contract and CLI exit codes.
+`policy.py` owns profiles, risk floors, proposal validation, fingerprints, and decisions. It preserves the v0.1.0 JSON contract and CLI exit codes. v0.2 fingerprint values intentionally preserve string case and list order to avoid false duplicate blocking; deployments must begin a new scope or recompute v0.1 history.
 
 ### Event model and authoritative ledger
 
 `models.py` defines validated call proposals, decisions, handles, and lifecycle events. Each event contains a schema version, session and call IDs, phase, timestamps, route, fingerprint, budget kind, profile, risk, mode, policy decision, progress, duration, and sanitized metadata.
 
-`ledger.py` uses SQLite as the authoritative cross-process store. A call counts once when its latest lifecycle reaches `started`, `completed`, or `failed`; `proposed` and `blocked` records do not consume budget. Queries are scoped to a session and return the existing governor history shape. An optional JSONL mirror makes records easy to inspect and stream.
+`ledger.py` uses SQLite as the authoritative cross-process store. A call counts once when its latest lifecycle reaches `started`, `completed`, or `failed`; `proposed`, `blocked`, and pre-execution `cancelled` final states do not consume budget. Queries are scoped to a session and return the existing governor history shape. An optional best-effort JSONL mirror makes records easy to inspect and stream without changing execution semantics if the mirror fails.
 
-Raw prompts, tool arguments, and results are not stored by default. Material inputs are used to compute a fingerprint and then discarded. Metadata must be JSON-compatible and explicitly supplied.
+Raw objectives/prompts, tool arguments, and results are not stored by default. Objectives are reduced to SHA-256 references; material inputs are used to compute a fingerprint and then discarded. Metadata must be JSON-compatible and explicitly supplied.
 
 ### Runtime wrapper
 
@@ -56,7 +56,7 @@ Profiles remain separate: `strict`, `balanced`, and `quality-first`. Internal po
 
 ### Codex adapter
 
-`codex_hook.py` reads official Codex command-hook JSON from stdin and writes lifecycle events for `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop`. It tolerates additional fields so later Codex versions do not break parsing.
+`codex_hook.py` reads official Codex command-hook JSON from stdin and writes lifecycle events for `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop`. It tolerates additional fields so later Codex versions do not break parsing, treats repeated delivery of one host call ID as idempotent, hashes host session/turn/call IDs before persistence, and scopes policy history to `turn_id` (or the individual call when no turn ID exists) rather than one long-lived Codex session.
 
 Current Codex hooks do not provide a supported veto for these events: `PreToolUse` does not accept the common stop fields, and `SubagentStart` explicitly ignores `continue: false`. Therefore the adapter supports `observe` and `warn` only and emits a `systemMessage` when policy would reject a call. A generated example hook file is opt-in because Codex requires users to review and trust hook definitions.
 
@@ -74,8 +74,11 @@ Lifecycle and tracing callbacks are observation surfaces, not a universal typed 
 ## Error handling and concurrency
 
 - Generate IDs with UUID4 and timestamps in UTC.
-- Use SQLite transactions and indexes on `(session_id, call_id)` and `(session_id, fingerprint)`.
+- Use one SQLite write transaction for history lookup, policy evaluation, and the `started`/`blocked` reservation so concurrent calls cannot share a stale budget snapshot.
+- Keep indexes on `(session_id, call_id)` and `(session_id, fingerprint)`.
+- Require a call ID to be unique inside its governance session so lifecycle grouping cannot be reused to undercount calls.
 - Keep JSONL writes one event per UTF-8 line and guard in-process writes with a lock.
+- Move async policy and ledger work to worker threads; if cancellation wins while a reservation is pending, finish the transaction and append a non-counting `cancelled` state before propagating cancellation.
 - Re-raise the original application exception after recording `failed`.
 - Default failed calls to `low_progress`, allowing only a materially changed retry under the existing policy.
 - In `fail-open`, record an internal-error decision and execute. In `fail-closed`, record it and raise before execution.
