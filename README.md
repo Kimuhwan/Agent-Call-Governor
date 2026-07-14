@@ -4,7 +4,7 @@
 
 [![Validate](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml/badge.svg)](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Codex Skill](https://img.shields.io/badge/Codex-Skill-111827)](agent-call-governor/SKILL.md)
+[![Codex Skill](https://img.shields.io/badge/Codex-Skill-111827)](skills/agent-call-governor/SKILL.md)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](pyproject.toml)
 
 Quality-preserving governance for agent, tool, and model calls.
@@ -142,7 +142,7 @@ Invoke the skill directly:
 Use $agent-call-governor in balanced mode and complete this task with the minimum sufficient delegation.
 ```
 
-For automatic lifecycle recording, configure `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop` from [the Codex hook guide](agent-call-governor/references/codex-hooks.md) and [example hooks.json](examples/codex-hooks.json). Policy history is scoped to a Codex turn when `turn_id` is available, so a long-lived thread does not exhaust one permanent budget; repeated delivery of the same host event is idempotent. Codex session, turn, tool-use, and agent IDs are stored only as SHA-256 references.
+For automatic lifecycle recording, configure `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop` from [the Codex hook guide](skills/agent-call-governor/references/codex-hooks.md) and [example hooks.json](examples/codex-hooks.json). Policy history is scoped to a Codex turn when `turn_id` is available, so a long-lived thread does not exhaust one permanent budget; repeated delivery of the same host event is idempotent. Codex session, turn, tool-use, and agent IDs are stored only as SHA-256 references.
 
 Current Codex hook contracts do not provide a dependable pre-tool/subagent veto. The adapter therefore rejects `enforce` and returns only supported warning fields. Use `GovernedRuntime` when the call must be stopped before execution.
 
@@ -154,7 +154,7 @@ The optional adapter provides:
 - `build_function_tool_guardrail` for the SDK's supported `FunctionTool` input veto;
 - `build_run_hooks` for observe/warn lifecycle recording across agent, LLM, local tool, and handoff events.
 
-See the [Agents SDK integration guide](agent-call-governor/references/openai-agents-sdk.md). Function-tool guardrails do not cover every hosted tool family or extension; wrap the whole run when a mandatory outer gate is required.
+See the [Agents SDK integration guide](skills/agent-call-governor/references/openai-agents-sdk.md). Function-tool guardrails do not cover every hosted tool family or extension; wrap the whole run when a mandatory outer gate is required.
 
 ## Deterministic policy CLI
 
@@ -163,10 +163,10 @@ The v0.1 JSON proposal fields and CLI exit codes remain compatible:
 ```bash
 agent-call-governor evaluate examples/proposal.json
 # or
-python agent-call-governor/scripts/governor.py evaluate examples/proposal.json
+python skills/agent-call-governor/scripts/governor.py evaluate examples/proposal.json
 ```
 
-Exit codes are `0` for allowed, `2` for policy denial, and `1` for invalid input. See the [proposal schema](agent-call-governor/references/proposal-schema.md) and [profile details](agent-call-governor/references/profiles.md).
+Exit codes are `0` for allowed, `2` for policy denial, and `1` for invalid input. See the [proposal schema](skills/agent-call-governor/references/proposal-schema.md) and [profile details](skills/agent-call-governor/references/profiles.md).
 
 ### Migrating fingerprint history from v0.1
 
@@ -210,7 +210,7 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 python evals/run_evals.py
 python evals/run_runtime_evals.py
-python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py agent-call-governor
+python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/agent-call-governor
 python -m build
 ```
 
@@ -219,7 +219,7 @@ The official Codex skill validator requires PyYAML. The build command requires t
 ## Project layout
 
 ```text
-agent-call-governor/
+skills/agent-call-governor/
   SKILL.md                         Codex policy instructions
   references/                      Policy and integration guides
   scripts/governor.py              Backward-compatible policy CLI

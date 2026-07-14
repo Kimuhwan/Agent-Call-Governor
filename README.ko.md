@@ -4,7 +4,7 @@
 
 [![Validate](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml/badge.svg)](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Codex Skill](https://img.shields.io/badge/Codex-Skill-111827)](agent-call-governor/SKILL.md)
+[![Codex Skill](https://img.shields.io/badge/Codex-Skill-111827)](skills/agent-call-governor/SKILL.md)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](pyproject.toml)
 
 에이전트·도구·모델 호출의 품질을 보존하는 거버넌스 도구입니다.
@@ -142,7 +142,7 @@ SQLite가 권위 있는 원장이며 JSONL은 선택형 best-effort 미러 또�
 $agent-call-governor를 balanced 모드로 사용하고 최소 충분 위임으로 이 작업을 완료해줘.
 ```
 
-자동 수명주기 기록은 [Codex 훅 안내](agent-call-governor/references/codex-hooks.md)와 [hooks.json 예제](examples/codex-hooks.json)를 따라 `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`을 설정하세요. `turn_id`가 있으면 정책 이력을 Codex 턴 단위로 분리하므로 긴 스레드가 하나의 영구 예산을 소진하지 않으며, 같은 호스트 이벤트의 재전달은 멱등 처리합니다. Codex session, turn, tool-use, agent ID는 SHA-256 참조값으로만 저장합니다.
+자동 수명주기 기록은 [Codex 훅 안내](skills/agent-call-governor/references/codex-hooks.md)와 [hooks.json 예제](examples/codex-hooks.json)를 따라 `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`을 설정하세요. `turn_id`가 있으면 정책 이력을 Codex 턴 단위로 분리하므로 긴 스레드가 하나의 영구 예산을 소진하지 않으며, 같은 호스트 이벤트의 재전달은 멱등 처리합니다. Codex session, turn, tool-use, agent ID는 SHA-256 참조값으로만 저장합니다.
 
 현재 Codex 훅 계약은 도구 또는 서브에이전트를 신뢰성 있게 사전 차단하는 기능을 제공하지 않습니다. 그래서 어댑터는 `enforce`를 거부하고 지원되는 경고 필드만 반환합니다. 실행 전 차단이 필요하면 `GovernedRuntime`을 사용하세요.
 
@@ -154,7 +154,7 @@ $agent-call-governor를 balanced 모드로 사용하고 최소 충분 위임으�
 - `build_function_tool_guardrail`: SDK가 공식 지원하는 `FunctionTool` 입력 veto
 - `build_run_hooks`: 에이전트, LLM, 로컬 도구, handoff 수명주기를 관찰/경고 모드로 기록
 
-자세한 내용은 [Agents SDK 연동 안내](agent-call-governor/references/openai-agents-sdk.md)를 참고하세요. 함수 도구 guardrail은 모든 hosted tool 계열이나 확장을 포괄하지 않습니다. 필수 외부 게이트가 필요하면 전체 실행을 감싸세요.
+자세한 내용은 [Agents SDK 연동 안내](skills/agent-call-governor/references/openai-agents-sdk.md)를 참고하세요. 함수 도구 guardrail은 모든 hosted tool 계열이나 확장을 포괄하지 않습니다. 필수 외부 게이트가 필요하면 전체 실행을 감싸세요.
 
 ## 결정론적 정책 CLI
 
@@ -163,10 +163,10 @@ v0.1 JSON 제안 필드와 CLI 종료 코드는 그대로 호환됩니다.
 ```bash
 agent-call-governor evaluate examples/proposal.json
 # 또는
-python agent-call-governor/scripts/governor.py evaluate examples/proposal.json
+python skills/agent-call-governor/scripts/governor.py evaluate examples/proposal.json
 ```
 
-종료 코드는 허용 `0`, 정책 거부 `2`, 잘못된 입력 `1`입니다. [제안 스키마](agent-call-governor/references/proposal-schema.md)와 [프로필 상세](agent-call-governor/references/profiles.md)를 참고하세요.
+종료 코드는 허용 `0`, 정책 거부 `2`, 잘못된 입력 `1`입니다. [제안 스키마](skills/agent-call-governor/references/proposal-schema.md)와 [프로필 상세](skills/agent-call-governor/references/profiles.md)를 참고하세요.
 
 ### v0.1 fingerprint 이력 마이그레이션
 
@@ -210,7 +210,7 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 python evals/run_evals.py
 python evals/run_runtime_evals.py
-python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py agent-call-governor
+python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/agent-call-governor
 python -m build
 ```
 
@@ -219,7 +219,7 @@ python -m build
 ## 프로젝트 구조
 
 ```text
-agent-call-governor/
+skills/agent-call-governor/
   SKILL.md                         Codex 정책 지침
   references/                      정책과 연동 안내
   scripts/governor.py              이전 버전 호환 정책 CLI

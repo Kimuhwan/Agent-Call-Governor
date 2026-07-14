@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
-SCRIPTS = Path(__file__).parents[1] / "agent-call-governor" / "scripts"
+SCRIPTS = Path(__file__).parents[1] / "skills" / "agent-call-governor" / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from agent_call_governor_runtime import CallLedger, CallProposal, evaluate

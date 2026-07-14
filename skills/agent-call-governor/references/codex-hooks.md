@@ -48,7 +48,7 @@ agent-call-governor-runtime codex-hook `
 When the runtime package is not installed as a command, use the script directly:
 
 ```powershell
-python C:\absolute\Agent-Call-Governor\agent-call-governor\scripts\codex_hook.py `
+python C:\absolute\Agent-Call-Governor\skills\agent-call-governor\scripts\codex_hook.py `
   --mode observe `
   --db C:\absolute\governor-data\events.sqlite3 `
   --jsonl C:\absolute\governor-data\events.jsonl

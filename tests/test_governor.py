@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[1] / "agent-call-governor" / "scripts" / "governor.py"
+SCRIPT = Path(__file__).parents[1] / "skills" / "agent-call-governor" / "scripts" / "governor.py"
 sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("governor", SCRIPT)
 assert SPEC and SPEC.loader

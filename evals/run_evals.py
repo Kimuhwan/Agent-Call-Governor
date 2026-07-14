@@ -13,7 +13,7 @@ from typing import Any
 
 
 ROOT = Path(__file__).parents[1]
-GOVERNOR_PATH = ROOT / "agent-call-governor" / "scripts" / "governor.py"
+GOVERNOR_PATH = ROOT / "skills" / "agent-call-governor" / "scripts" / "governor.py"
 CASES_PATH = Path(__file__).with_name("cases.json")
 SPEC = importlib.util.spec_from_file_location("governor", GOVERNOR_PATH)
 assert SPEC and SPEC.loader

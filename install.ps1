@@ -2,7 +2,7 @@
 param()
 
 $ErrorActionPreference = "Stop"
-$source = Join-Path $PSScriptRoot "agent-call-governor"
+$source = Join-Path $PSScriptRoot "skills\agent-call-governor"
 $skillsRoot = if ($env:CODEX_HOME) {
     Join-Path $env:CODEX_HOME "skills"
 } else {

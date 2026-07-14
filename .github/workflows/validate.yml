@@ -63,7 +63,7 @@ jobs:
           import re
           import yaml
 
-          path = pathlib.Path("agent-call-governor/SKILL.md")
+          path = pathlib.Path("skills/agent-call-governor/SKILL.md")
           content = path.read_text(encoding="utf-8")
           match = re.match(r"^---\n(.*?)\n---\n", content, re.DOTALL)
           assert match, "SKILL.md must start with YAML frontmatter"

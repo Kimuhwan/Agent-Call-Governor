@@ -249,7 +249,7 @@ class CodexHookTests(unittest.TestCase):
 
     def test_cli_reads_stdin_and_emits_valid_warning_json(self) -> None:
         db_path = Path(self.tempdir.name) / "cli.sqlite3"
-        script = ROOT / "agent-call-governor" / "scripts" / "codex_hook.py"
+        script = ROOT / "skills" / "agent-call-governor" / "scripts" / "codex_hook.py"
         first_payload = load_fixture("pre_tool_use.json")
         second_payload = load_fixture("pre_tool_use.json")
         second_payload["tool_use_id"] = "tool-call-2"
@@ -278,7 +278,7 @@ class CodexHookTests(unittest.TestCase):
 
     def test_cli_accepts_utf8_bom_from_windows_powershell_pipeline(self) -> None:
         db_path = Path(self.tempdir.name) / "bom-cli.sqlite3"
-        script = ROOT / "agent-call-governor" / "scripts" / "codex_hook.py"
+        script = ROOT / "skills" / "agent-call-governor" / "scripts" / "codex_hook.py"
         payload = json.dumps(load_fixture("pre_tool_use.json")).encode("utf-8")
 
         result = subprocess.run(
