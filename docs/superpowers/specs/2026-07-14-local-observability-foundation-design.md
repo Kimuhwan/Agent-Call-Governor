@@ -143,6 +143,7 @@ duplicate_scope = turn
 
 The canonical identity always includes:
 
+- an objective digest;
 - tool or route name;
 - canonical material input digest;
 - working directory when it can affect meaning;
@@ -156,6 +157,7 @@ Canonicalization rules:
 - preserve string case and whitespace unless a tool contract explicitly says otherwise;
 - remove only explicitly named volatile host identifiers;
 - never persist the canonical raw payload;
+- never persist the raw objective used to produce its digest;
 - hash the canonical representation before storage.
 
 Initial tool rules:
@@ -316,7 +318,7 @@ Stop
 
 Behavior:
 
-- `SessionStart`: open or migrate the local ledger, apply retention, and append `session.started`.
+- `SessionStart`: open or migrate the local ledger, apply retention, and append `session.started`. Because the host does not provide a unique delivery ID for this event, deduplicate only identical delivery fingerprints observed within a five-second window.
 - `PreToolUse`: normalize the proposal, calculate the v2 fingerprint, atomically record the decision and reservation, and optionally return a warning.
 - `PostToolUse`: append one idempotent terminal event with `progress = unknown` unless deterministic evidence is present.
 - `SubagentStart`: record lifecycle data and optional warning context; never claim it can stop the subagent.
@@ -462,7 +464,9 @@ Required test groups:
 
 4. Hook lifecycle
    - all six bundled events;
-   - SessionStart and Stop idempotency;
+   - strict tool/subagent idempotency from host IDs;
+   - five-second best-effort SessionStart delivery deduplication;
+   - Stop idempotency from the turn identifier when present;
    - raw host IDs absent;
    - successful completion defaults to unknown;
    - malformed payload exits zero through the bundled dispatcher; and
@@ -495,7 +499,8 @@ Existing policy regression, runtime replay, Agents SDK adapter, concurrency, can
 - Codex discovers the repository as a plugin with its bundled skill and hooks.
 - A clean plugin install records all six supported lifecycle events without a separate manual hooks file.
 - Parallel hook processes cannot corrupt the database or overspend the final budget slot.
-- Same-call-ID redelivery returns the previous decision and does not create a second logical decision.
+- Same tool/subagent call-ID redelivery returns the previous decision and does not create a second logical decision.
+- SessionStart duplicates inside the documented five-second delivery window collapse, without treating later legitimate resumes as duplicates.
 - Fingerprint version 2 is stored and tool-aware false-positive fixtures pass.
 - Existing v0.2 ledgers migrate without event loss.
 - Hook internal failures do not stop the Codex call path.
