@@ -73,7 +73,7 @@ See [SKILL.md](agent-call-governor/SKILL.md) for the complete policy.
 
 | Profile | Best for | Behavior |
 | --- | --- | --- |
-| `strict` | Reversible, low-risk, latency-sensitive work | Small budgets and no low-progress retry |
+| `strict` | Reversible, low-risk, latency-sensitive work | Small budgets; high-risk work still gets one changed-strategy retry |
 | `balanced` | Default product and engineering work | Removes waste while preserving ordinary verification |
 | `quality-first` | High-impact or costly-to-correct work | Larger risk floors and two changed-strategy retries |
 
@@ -88,6 +88,12 @@ python agent-call-governor/scripts/governor.py evaluate examples/proposal.json
 ```
 
 The command returns exit code `0` when allowed, `2` when rejected by policy, and `1` for invalid input. See the [proposal schema](agent-call-governor/references/proposal-schema.md) for details.
+
+## Current scope
+
+Version 0.1.0 is **prompt-level governance with optional deterministic enforcement**. The skill guides Codex before delegation, while `governor.py` enforces a decision only when a caller explicitly invokes it.
+
+It does not yet intercept every Codex or SDK call automatically, collect authoritative runtime telemetry, or act as a complete agent-call firewall. Runtime logging and pre-call/post-call integration are the next layer of the project.
 
 ## Validate locally
 
