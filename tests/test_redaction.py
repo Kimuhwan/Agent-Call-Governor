@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import tempfile
@@ -13,13 +14,26 @@ from agent_call_governor_runtime.models import CallEvent
 from agent_call_governor_runtime.redaction import redact_text, sanitize_event_dict, sanitize_metadata
 
 
+def sha256_reference(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def custom_key(value: str) -> str:
+    return "custom:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
 class RedactionTests(unittest.TestCase):
     def test_text_redacts_credentials_email_and_home_path(self) -> None:
-        raw = "Bearer sk-secret-123 user@example.com C:/Users/Ada/private.txt"
+        raw = (
+            "Bearer sk-secret-123 rk-independent-credential-456 user@example.com "
+            r"C:/Users/Ada/private.txt C:\Users\Ada\other.txt"
+        )
         safe = redact_text(raw, home_directory="C:/Users/Ada")
         self.assertNotIn("sk-secret-123", safe)
+        self.assertNotIn("rk-independent-credential-456", safe)
         self.assertNotIn("user@example.com", safe)
         self.assertNotIn("C:/Users/Ada", safe)
+        self.assertNotIn(r"C:\Users\Ada", safe)
         self.assertIn("[REDACTED", safe)
 
     def test_known_fields_keep_safe_scalars_and_unknown_strings_are_hashed(self) -> None:
@@ -66,6 +80,120 @@ class RedactionTests(unittest.TestCase):
         once = sanitize_metadata({"custom": "secret"}, source="runtime")
         twice = sanitize_metadata(once, source="runtime")
         self.assertEqual(once, twice)
+
+    def test_nested_unknown_keys_and_primitives_are_hashed(self) -> None:
+        account_id = 3141592653589793
+        retry_count = 2718281828459045
+        email_key = "user@example.com"
+        list_email_key = "list-user@example.com"
+        safe = sanitize_metadata(
+            {
+                "debug": {
+                    "tool_input": {"account_id": account_id},
+                    email_key: True,
+                    "retry_count": retry_count,
+                    "items": [{list_email_key: False, "count": 42}],
+                }
+            },
+            source="runtime",
+        )
+
+        debug = safe[custom_key("debug")]
+        self.assertEqual(debug["tool_input"], "[REDACTED]")
+        self.assertEqual(debug[custom_key(email_key)], sha256_reference("True"))
+        self.assertEqual(debug[custom_key("retry_count")], sha256_reference(str(retry_count)))
+        items = debug[custom_key("items")]
+        self.assertEqual(items[0][custom_key(list_email_key)], sha256_reference("False"))
+        self.assertEqual(items[0][custom_key("count")], sha256_reference("42"))
+        encoded = json.dumps(safe, sort_keys=True)
+        for canary in (
+            "account_id",
+            str(account_id),
+            email_key,
+            list_email_key,
+            "retry_count",
+            str(retry_count),
+        ):
+            self.assertNotIn(canary, encoded)
+
+    def test_nested_canaries_do_not_survive_model_persistence_or_export(self) -> None:
+        account_id = 3141592653589793
+        retry_count = 2718281828459045
+        email_key = "nested-canary@example.com"
+        raw_metadata = {
+            "debug": {
+                "tool_input": {"account_id": account_id},
+                email_key: True,
+                "retry_count": retry_count,
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "events.sqlite3"
+            mirror = root / "events.jsonl"
+            exported = root / "export.jsonl"
+            ledger = CallLedger(database, mirror)
+            event = CallEvent.create(
+                session_id="session-nested",
+                call_id="call-nested",
+                phase="started",
+                objective="Inspect nested metadata",
+                route="agent:reviewer",
+                fingerprint="fp-nested",
+                budget_kind="agent",
+                profile="balanced",
+                quality_risk="medium",
+                mode="observe",
+                source="runtime",
+                metadata=raw_metadata,
+            )
+            model_metadata = json.dumps(event.metadata, sort_keys=True)
+            event.metadata["debug"] = raw_metadata["debug"]
+
+            ledger.append(event)
+            export_jsonl([event], exported, database)
+
+            with closing(sqlite3.connect(database)) as connection:
+                sqlite_metadata = str(connection.execute(
+                    "SELECT metadata_json FROM call_events"
+                ).fetchone()[0])
+            representations = {
+                "model": model_metadata,
+                "sqlite": sqlite_metadata,
+                "jsonl": mirror.read_text(encoding="utf-8"),
+                "export": exported.read_text(encoding="utf-8"),
+            }
+            for boundary, encoded in representations.items():
+                with self.subTest(boundary=boundary):
+                    self.assertIn("[REDACTED]", encoded)
+                    self.assertNotIn('"debug"', encoded)
+                    self.assertNotIn("account_id", encoded)
+                    self.assertNotIn(str(account_id), encoded)
+                    self.assertNotIn(email_key, encoded)
+                    self.assertNotIn("retry_count", encoded)
+                    self.assertNotIn(str(retry_count), encoded)
+
+    def test_malformed_sha256_references_are_rehashed(self) -> None:
+        key = custom_key("field")
+        for forged in (
+            "sha256:" + "g" * 64,
+            "sha256:" + "A" * 64,
+        ):
+            with self.subTest(forged=forged):
+                safe = sanitize_metadata({key: forged}, source="runtime")
+                self.assertEqual(safe[key], sha256_reference(forged))
+                self.assertNotIn(forged, json.dumps(safe, sort_keys=True))
+
+    def test_malformed_custom_keys_are_hashed(self) -> None:
+        for forged in (
+            "custom:" + "g" * 64,
+            "custom:" + "A" * 64,
+        ):
+            with self.subTest(forged=forged):
+                expected = custom_key(forged)
+                safe = sanitize_metadata({forged: "private"}, source="runtime")
+                self.assertEqual(safe, {expected: sha256_reference("private")})
+                self.assertNotIn(forged, safe)
 
     def test_persistence_and_export_resanitize_mutated_metadata(self) -> None:
         raw_key = "private_key_canary"

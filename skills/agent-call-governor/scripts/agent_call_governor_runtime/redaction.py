@@ -34,15 +34,21 @@ SENSITIVE_KEYS = frozenset({
     "authorization", "exception", "exception_message", "input", "objective", "output",
     "prompt", "raw_input", "raw_output", "tool_input", "tool_output",
 })
+_SHA256_REFERENCE = re.compile(r"sha256:[0-9a-f]{64}")
+_CUSTOM_METADATA_KEY = re.compile(r"custom:[0-9a-f]{64}")
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _API_KEY = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b")
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 
 
 def _hash(value: str) -> str:
-    if value.startswith("sha256:") and len(value) == 71:
+    if _SHA256_REFERENCE.fullmatch(value):
         return value
     return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _custom_key(value: str) -> str:
+    return "custom:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def redact_text(value: str, *, home_directory: str | None = None) -> str:
@@ -58,18 +64,26 @@ def redact_text(value: str, *, home_directory: str | None = None) -> str:
 
 def _safe_value(value: Any, *, known: bool, home_directory: str | None) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
-        return value
+        return value if known else _hash(str(value))
     if isinstance(value, str):
         redacted = redact_text(value, home_directory=home_directory)
         return redacted if known else _hash(redacted)
     if isinstance(value, list):
         return [_safe_value(item, known=known, home_directory=home_directory) for item in value]
     if isinstance(value, Mapping):
-        return {
-            str(key): _safe_value(item, known=known and str(key) not in SENSITIVE_KEYS,
-                                  home_directory=home_directory)
-            for key, item in value.items()
-        }
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            name = str(key)
+            if name in SENSITIVE_KEYS:
+                result[name] = "[REDACTED]"
+                continue
+            safe_name = name if _CUSTOM_METADATA_KEY.fullmatch(name) else _custom_key(name)
+            result[safe_name] = _safe_value(
+                item,
+                known=False,
+                home_directory=home_directory,
+            )
+        return result
     return _hash(repr(type(value).__name__))
 
 
@@ -83,7 +97,7 @@ def sanitize_metadata(
     result: dict[str, Any] = {}
     for key, value in metadata.items():
         name = str(key)
-        if name.startswith("custom:") and len(name) == 71:
+        if _CUSTOM_METADATA_KEY.fullmatch(name):
             result[name] = _safe_value(value, known=False, home_directory=home_directory)
         elif name in SENSITIVE_KEYS:
             result[name] = "[REDACTED]"
@@ -97,7 +111,7 @@ def sanitize_metadata(
             else:
                 result[name] = _safe_value(value, known=True, home_directory=home_directory)
         else:
-            result["custom:" + _hash(name)[7:]] = _safe_value(
+            result[_custom_key(name)] = _safe_value(
                 value, known=False, home_directory=home_directory
             )
     return result
