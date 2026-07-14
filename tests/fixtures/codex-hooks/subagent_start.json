@@ -1,0 +1,10 @@
+{
+  "session_id": "session-1",
+  "turn_id": "turn-2",
+  "hook_event_name": "SubagentStart",
+  "agent_id": "agent-call-1",
+  "agent_type": "reviewer",
+  "transcript_path": "C:\\private\\transcript.jsonl",
+  "model": "gpt-5",
+  "permission_mode": "default"
+}

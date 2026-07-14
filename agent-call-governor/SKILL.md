@@ -22,6 +22,19 @@ Escalate the route or budget when any of these signals is present:
 
 Never claim savings when the task success rate falls. Measure under-calling alongside redundant calls.
 
+## Choose the lightest governance layer
+
+Use the in-agent policy in this file for ordinary Codex work. Do not install or configure runtime components merely because the skill triggered.
+
+When the user's development task calls for reusable enforcement, choose the narrowest sufficient integration:
+
+- use `scripts/governor.py evaluate` for one deterministic proposal decision;
+- use `CallProposal`, `CallLedger`, and `GovernedRuntime` for application-owned Python calls that must be recorded or blocked before execution;
+- use Codex lifecycle hooks only for `observe` or `warn`; read [references/codex-hooks.md](references/codex-hooks.md) and never claim those hooks provide a pre-tool or pre-subagent veto;
+- for OpenAI Agents SDK code, read [references/openai-agents-sdk.md](references/openai-agents-sdk.md), wrap a complete run with `GovernedRunner`, or attach the supported function-tool input guardrail.
+
+Roll runtime enforcement out as `observe`, then `warn`, then `enforce`. Choose `fail-open` when availability is the priority and `fail-closed` when an unevaluated or unrecorded call must not proceed. State the selected boundary; do not describe wrapped-call enforcement as a universal firewall.
+
 ## Route work from cheapest to strongest
 
 Consider these routes in order and choose the first sufficient one:
@@ -76,7 +89,7 @@ Allow at most one handoff. Allow no identical retry. Raise a budget for quality-
 
 ## Block duplicates
 
-Normalize a proposed call from its objective, route or capability, and material inputs. Exclude timestamps, generated IDs, ordering that does not change meaning, and wording-only differences.
+Normalize a proposed call from its objective, route or capability, and material inputs. Exclude timestamps, generated IDs, ordering that is explicitly known not to change meaning, and wording-only differences. In the generic deterministic gate, preserve string case and list order by default; an application may pre-normalize only fields whose schema explicitly declares them case-insensitive or unordered.
 
 Reject a proposed call when:
 
@@ -91,6 +104,8 @@ Permit one retry only when the query, parameters, source, or strategy changes ma
 Apply duplicate prevention before mandatory exceptions. An explicit request does not authorize repeating an identical completed external action; require changed inputs or a new objective.
 
 For complex or long-running workflows, run `python scripts/governor.py evaluate proposal.json` to apply deterministic risk floors, budget, progress, and duplicate checks. Read [references/proposal-schema.md](references/proposal-schema.md) when preparing the JSON input. Do not run the script for a simple decision that is already obvious.
+
+When a runtime ledger is already in use, treat its SQLite history as authoritative. JSONL is an optional best-effort audit mirror. Do not put raw objectives/prompts, material inputs, tool arguments, results, transcripts, or exception messages into events or event metadata; store objective hash references, fingerprints, and explicitly safe operational fields only.
 
 ## Gate on progress
 

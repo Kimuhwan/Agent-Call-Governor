@@ -1,34 +1,66 @@
 # Evaluation methodology
 
-The evaluation suite protects both sides of the policy:
+Agent Call Governor evaluates both failure directions:
 
-- `quality_preservation` cases verify that risk floors and mandatory exceptions prevent under-calling.
-- `waste_control` cases verify that duplicates, exhausted retries, satisfied stop conditions, and spent budgets are blocked.
+- **under-calling:** a necessary lookup, verification, retry, or specialist is suppressed;
+- **over-calling:** a duplicate, exhausted, already-satisfied, or no-progress call executes.
 
-Run:
+Call reduction counts as a win only when the chosen quality floor is preserved.
+
+## 1. Deterministic policy regression
 
 ```bash
 python evals/run_evals.py
 ```
 
-The runner merges each case with a common proposal, evaluates it through the same `governor.py` used by the skill, and checks the expected decision and reason. Any mismatch exits non-zero and fails CI.
+This suite merges each case in `cases.json` with a common proposal and calls the same deterministic policy used by the CLI and runtime. It reports:
 
-## What the score means
+- `policy_accuracy`;
+- `quality_preservation_rate`;
+- `waste_control_rate`.
 
-`policy_accuracy`, `quality_preservation_rate`, and `waste_control_rate` measure deterministic rule consistency on the checked-in regression cases. They do not prove an end-to-end task success rate, a production call-reduction percentage, or model-independent generalization.
+Latest checked-in result: **19/19**. See [results-2026-07-13.md](results-2026-07-13.md).
 
-Use fresh-agent scenario evaluations and real workload telemetry to measure those outcomes. Compare at least:
+## 2. Enforce-mode runtime replay
+
+```bash
+python evals/run_runtime_evals.py
+```
+
+This suite replays every step in `runtime_workloads.json` through a real `GovernedRuntime`, temporary SQLite ledger, and `enforce` mode. It covers five workload families:
+
+- mandatory calls after the ordinary budget is spent;
+- high-risk changed-strategy retries under `strict`;
+- exact duplicate blocking;
+- stopping after a sufficient result;
+- stopping after no progress.
+
+The checked-in set contains **64 workloads and 128 call steps**. The runner reports necessary-call preservation, redundant-call blocking, duplicate blocking, under-call failures, decision reasons, and per-family pass rates.
+
+Latest checked-in result: **64/64**, with **96/96 necessary calls preserved**, **32/32 redundant calls blocked**, and **0 under-call failures**. See [runtime-results-2026-07-14.md](runtime-results-2026-07-14.md).
+
+## What these scores mean
+
+These are deterministic regression scores for the checked-in cases. They demonstrate that the current implementation behaves consistently on those inputs. They do not prove:
+
+- a production task-success rate;
+- a universal call-reduction percentage;
+- model-independent generalization;
+- latency or cost savings on a live workload; or
+- complete host-level interception.
+
+## Fresh-agent and production evaluation
+
+For behavioral evaluation, give matched tasks to independent runs with and without the Governor. Record acceptance-criteria completion, direct-tool and agent calls, repeated fingerprints, latency, cost, and uncertainties. Blind the output judge to condition and call count.
+
+For a production rollout, start in `observe`, establish a baseline, then move to `warn` and `enforce` only after reviewing would-block calls. Track at least:
 
 - task success and acceptance-criteria completion;
+- necessary-call preservation;
+- duplicate/no-new-information calls;
 - agent and direct-tool calls per task;
-- duplicate or no-new-information calls;
 - latency and cost;
-- under-call failures where a necessary lookup, verification, or specialist was suppressed.
+- policy or ledger failures;
+- under-call incidents and manual overrides.
 
-Treat call reduction as a win only when task success remains within the chosen quality tolerance.
-
-## Matched Codex A/B trials
-
-For a behavioral trial, give identical tasks to independent Codex runs with and without the Governor. Record completed tasks, direct-tool calls, subagent calls, identical retries, and uncertainties. Give anonymized outputs to a third evaluator that cannot see the execution condition or call counts.
-
-Report the sample size and do not generalize a single run into a production savings claim. See [the latest results](results-2026-07-13.md) for the first checked-in trial.
+The first small matched Codex A/B trial is documented in [results-2026-07-13.md](results-2026-07-13.md). Treat it as directional evidence, not a production benchmark.

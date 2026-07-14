@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:\\absolute\\Agent-Call-Governor\\agent-call-governor\\scripts\\codex_hook.py --mode observe --db C:\\absolute\\governor-data\\events.sqlite3",
+            "timeout": 30,
+            "statusMessage": "Recording governed tool call"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:\\absolute\\Agent-Call-Governor\\agent-call-governor\\scripts\\codex_hook.py --mode observe --db C:\\absolute\\governor-data\\events.sqlite3",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:\\absolute\\Agent-Call-Governor\\agent-call-governor\\scripts\\codex_hook.py --mode observe --db C:\\absolute\\governor-data\\events.sqlite3",
+            "timeout": 30,
+            "statusMessage": "Recording governed subagent call"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:\\absolute\\Agent-Call-Governor\\agent-call-governor\\scripts\\codex_hook.py --mode observe --db C:\\absolute\\governor-data\\events.sqlite3",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

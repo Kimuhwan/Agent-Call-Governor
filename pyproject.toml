@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-call-governor-runtime"
+version = "0.2.0"
+description = "Quality-preserving runtime governance for agent and tool calls"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Kimuhwan" }]
+dependencies = []
+
+[project.optional-dependencies]
+agents = ["openai-agents>=0.18.2,<0.19"]
+dev = ["build>=1.2", "PyYAML>=6"]
+
+[project.urls]
+Repository = "https://github.com/Kimuhwan/Agent-Call-Governor"
+Issues = "https://github.com/Kimuhwan/Agent-Call-Governor/issues"
+
+[project.scripts]
+agent-call-governor = "agent_call_governor_runtime.policy:main"
+agent-call-governor-runtime = "agent_call_governor_runtime.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["agent-call-governor/scripts"]
+include = ["agent_call_governor_runtime*"]

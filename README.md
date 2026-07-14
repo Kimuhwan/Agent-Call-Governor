@@ -5,125 +5,235 @@
 [![Validate](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml/badge.svg)](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Codex Skill](https://img.shields.io/badge/Codex-Skill-111827)](agent-call-governor/SKILL.md)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](pyproject.toml)
 
-Remove wasted calls without turning quality controls into a blanket ban.
+Quality-preserving governance for agent, tool, and model calls.
 
-Agent Call Governor is a lightweight [Codex skill](agent-call-governor/SKILL.md) that applies a quality-preserving call policy before delegation, retries, and multi-agent workflows. It combines risk-aware budgets, duplicate fingerprints, progress gates, and observable stop conditions.
+Agent Call Governor reduces duplicate, exhausted, and no-new-information calls without turning cost control into a blanket ban. It combines a Codex skill, a deterministic policy, an application-owned runtime wrapper, an authoritative SQLite ledger, and optional Codex/OpenAI Agents SDK adapters.
 
-## Why use it?
+> **v0.2.0 scope:** wrapped calls can be blocked before execution. Codex lifecycle hooks observe or warn only. This project is not a universal host-level agent-call firewall.
 
-Complex models can over-decompose simple work, repeat calls that add no information, or delegate direct lookups to another agent. This skill gives Codex a consistent decision order:
+## What you get
+
+| Layer | Purpose | Enforcement |
+| --- | --- | --- |
+| Codex skill | Choose the minimum sufficient route before delegation | Prompt-level policy |
+| Policy CLI | Evaluate one JSON proposal deterministically | Enforced when the caller invokes it |
+| Python runtime | Gate sync/async application-owned calls and record outcomes | Pre-call block for wrapped calls |
+| SQLite + JSONL | Keep authoritative, queryable lifecycle history | Recording and reports |
+| Codex hooks | Record tool/subagent lifecycle and surface warnings | Observe/warn only |
+| OpenAI Agents SDK | Wrap complete runs, observe lifecycle, guard function tools | Whole-run wrapper and supported function-tool veto |
+
+The policy budgets agent calls separately from direct tools, blocks normalized duplicates, stops after sufficient/no-progress results, and preserves mandatory calls and high-risk changed-strategy retries.
+
+## Architecture
 
 ```mermaid
-flowchart LR
-    A[Current context] -->|insufficient| B[Direct tool]
-    B -->|capability gap remains| C[One specialist]
-    C -->|independent subproblems| D[Multiple agents]
-    A -->|sufficient| E[Complete task]
-    B -->|sufficient| E
-    C -->|sufficient| E
+flowchart TD
+    A["Call proposal"] --> P["Deterministic policy"]
+    P --> W["GovernedRuntime wrapper"]
+    P --> C["Codex hook adapter"]
+    P --> S["Agents SDK adapters"]
+    W -->|"observe / warn / enforce"| L["SQLite ledger"]
+    C -->|"observe / warn"| L
+    S -->|"wrapper / guardrail / hooks"| L
+    L --> R["Report and sanitized JSONL export"]
 ```
-
-Direct tools and agent calls are budgeted separately. Required calls for freshness, verification, safety, private state, or explicit user actions are never suppressed.
-
-The objective is **minimum sufficient calls**, not minimum calls. When cost controls would materially increase the chance of an incorrect, stale, unsafe, or incomplete result, the quality floor wins.
 
 ## Install
 
-### Windows PowerShell
+Clone once:
+
+```bash
+git clone https://github.com/Kimuhwan/Agent-Call-Governor.git
+cd Agent-Call-Governor
+```
+
+Install the Codex skill:
 
 ```powershell
-git clone https://github.com/Kimuhwan/Agent-Call-Governor.git
-powershell -ExecutionPolicy Bypass -File .\Agent-Call-Governor\install.ps1
+# Windows PowerShell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
 ```
-
-### macOS or Linux
 
 ```bash
-git clone https://github.com/Kimuhwan/Agent-Call-Governor.git
-./Agent-Call-Governor/install.sh
+# macOS or Linux
+./install.sh
 ```
 
-Restart Codex after installation. The skill is installed at `~/.codex/skills/agent-call-governor`.
+Restart Codex. The skill is copied to `~/.codex/skills/agent-call-governor`. Both installers replace that skill directory cleanly and honor `CODEX_HOME` when it is set.
 
-## Use
+Install the Python runtime when your application needs logging or enforcement:
 
-Invoke it explicitly:
+```bash
+python -m pip install .
+```
+
+For OpenAI Agents SDK integration:
+
+```bash
+python -m pip install ".[agents]"
+```
+
+The core runtime has no third-party dependency. The optional extra currently supports `openai-agents>=0.18.2,<0.19`.
+
+## Quick start: wrap a call
+
+```python
+from agent_call_governor_runtime import CallLedger, CallProposal, GovernedRuntime
+
+ledger = CallLedger(
+    ".governor/events.sqlite3",
+    ".governor/events.jsonl",  # optional human-readable mirror
+)
+runtime = GovernedRuntime(
+    ledger,
+    mode="observe",             # observe -> warn -> enforce
+    failure_policy="fail-open", # choose explicitly before enforce rollout
+)
+
+proposal = CallProposal(
+    session_id="support-42",
+    objective="Look up one customer order",
+    route="tool:lookup_order",
+    capability_gap="The order state is not in local context",
+    expected_new_information="The current order status",
+    stop_condition="One authoritative order record is returned",
+    material_inputs={"order_id": "42"},
+    budget_kind="direct-tool",
+    profile="balanced",
+    quality_risk="medium",
+)
+
+def lookup_order(order_id: str) -> dict[str, str]:
+    return {"order_id": order_id, "status": "paid"}
+
+result = runtime.run(proposal, lookup_order, "42")
+```
+
+For an async callable, use `await runtime.run_async(...)`.
+
+Roll out in this order:
+
+1. **Observe:** execute every call and measure what the policy would block.
+2. **Warn:** keep executing but surface would-block decisions.
+3. **Enforce:** block denied calls before the wrapped callable runs.
+4. Choose **fail-open** when availability wins, or **fail-closed** when an unevaluated/unrecorded call must not proceed.
+
+## Inspect the ledger
+
+```bash
+agent-call-governor-runtime report --db .governor/events.sqlite3
+agent-call-governor-runtime report --db .governor/events.sqlite3 --json
+agent-call-governor-runtime export-jsonl \
+  --db .governor/events.sqlite3 \
+  --output .governor/export.jsonl
+```
+
+SQLite is authoritative; JSONL is an optional best-effort mirror or export. A mirror write failure is reported as a warning but never invalidates a committed SQLite decision. By default, events do **not** contain raw objectives/prompts, material inputs, tool arguments, tool results, transcripts, or exception messages. Objectives are stored as SHA-256 references; events otherwise contain fingerprints, lifecycle phases, decisions, progress, duration, and explicitly safe metadata.
+
+Pre-call history, policy evaluation, and the `started`/`blocked` reservation are committed in one SQLite transaction. Concurrent enforce calls therefore cannot both consume the same final budget slot or execute the same fingerprint.
+
+## Use it in Codex
+
+Invoke the skill directly:
 
 ```text
-Use $agent-call-governor to investigate this repository with the minimum sufficient delegation.
+Use $agent-call-governor in balanced mode and complete this task with the minimum sufficient delegation.
 ```
 
-It can also trigger implicitly when Codex is about to delegate, retry a call, or plan a multi-agent workflow.
+For automatic lifecycle recording, configure `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop` from [the Codex hook guide](agent-call-governor/references/codex-hooks.md) and [example hooks.json](examples/codex-hooks.json). Policy history is scoped to a Codex turn when `turn_id` is available, so a long-lived thread does not exhaust one permanent budget; repeated delivery of the same host event is idempotent. Codex session, turn, tool-use, and agent IDs are stored only as SHA-256 references.
 
-## How decisions are made
+Current Codex hook contracts do not provide a dependable pre-tool/subagent veto. The adapter therefore rejects `enforce` and returns only supported warning fields. Use `GovernedRuntime` when the call must be stopped before execution.
 
-Before a call, Codex identifies the capability gap, expected new information, cheapest sufficient route, remaining budget, stop condition, and normalized fingerprint. After every result it classifies progress:
+## OpenAI Agents SDK
 
-| Result | Behavior |
-| --- | --- |
-| `sufficient` | Stop and complete the task |
-| `material_progress` | Continue only for a defined remaining gap |
-| `low_progress` | Allow one changed-strategy attempt |
-| `no_progress` | Stop delegation and report the best supported result |
+The optional adapter provides:
 
-See [SKILL.md](agent-call-governor/SKILL.md) for the complete policy.
+- `GovernedRunner` for application-owned enforcement around complete `Runner.run` and `Runner.run_sync` workflows, with a fresh internal observer hook injected by default;
+- `build_function_tool_guardrail` for the SDK's supported `FunctionTool` input veto;
+- `build_run_hooks` for observe/warn lifecycle recording across agent, LLM, local tool, and handoff events.
 
-## Profiles
+See the [Agents SDK integration guide](agent-call-governor/references/openai-agents-sdk.md). Function-tool guardrails do not cover every hosted tool family or extension; wrap the whole run when a mandatory outer gate is required.
 
-| Profile | Best for | Behavior |
-| --- | --- | --- |
-| `strict` | Reversible, low-risk, latency-sensitive work | Small budgets; high-risk work still gets one changed-strategy retry |
-| `balanced` | Default product and engineering work | Removes waste while preserving ordinary verification |
-| `quality-first` | High-impact or costly-to-correct work | Larger risk floors and two changed-strategy retries |
+## Deterministic policy CLI
 
-High-risk work automatically receives a minimum safe budget even when a lower limit is configured. Mandatory calls can exceed the budget, but exact duplicate fingerprints remain blocked to prevent repeated side effects. See [profile details](agent-call-governor/references/profiles.md).
-
-## Optional deterministic gate
-
-For long-running workflows, the zero-dependency Python helper can block duplicate or over-budget proposals:
+The v0.1 JSON proposal fields and CLI exit codes remain compatible:
 
 ```bash
+agent-call-governor evaluate examples/proposal.json
+# or
 python agent-call-governor/scripts/governor.py evaluate examples/proposal.json
 ```
 
-The command returns exit code `0` when allowed, `2` when rejected by policy, and `1` for invalid input. See the [proposal schema](agent-call-governor/references/proposal-schema.md) for details.
+Exit codes are `0` for allowed, `2` for policy denial, and `1` for invalid input. See the [proposal schema](agent-call-governor/references/proposal-schema.md) and [profile details](agent-call-governor/references/profiles.md).
 
-## Current scope
+### Migrating fingerprint history from v0.1
 
-Version 0.1.0 is **prompt-level governance with optional deterministic enforcement**. The skill guides Codex before delegation, while `governor.py` enforces a decision only when a caller explicitly invokes it.
+v0.2 intentionally preserves string case and list order in fingerprints. This prevents case-sensitive identifiers and ordered operations from being collapsed into a false duplicate. Fingerprint values produced by v0.1 may therefore differ even though the JSON interface is unchanged. Before enabling v0.2 enforcement, start a new governance session/scope or recompute stored history with v0.2; do not mix old and new fingerprint histories and expect cross-version duplicate matching.
 
-It does not yet intercept every Codex or SDK call automatically, collect authoritative runtime telemetry, or act as a complete agent-call firewall. Runtime logging and pre-call/post-call integration are the next layer of the project.
+## Profiles and quality floor
+
+| Profile | Best for | Behavior |
+| --- | --- | --- |
+| `strict` | Reversible, low-risk, latency-sensitive work | Small budgets; high-risk work still gets a changed-strategy retry |
+| `balanced` | Default product and engineering work | Removes waste while preserving ordinary verification |
+| `quality-first` | High-impact or costly-to-correct work | Larger risk floors and two changed-strategy retries |
+
+Mandatory calls for freshness, explicit verification, high stakes, private state, missing files, requested actions, safety, and system instructions can exceed ordinary budgets. Exact duplicates remain blocked to avoid repeated side effects.
+
+## Evaluation evidence
+
+Two deterministic suites protect both sides of the policy:
+
+- policy regression: **19/19** cases;
+- runtime replay: **64/64** workloads and **128** call steps;
+- necessary-call preservation: **96/96 (100%)**;
+- redundant-call blocking: **32/32 (100%)**;
+- duplicate blocking: **16/16 (100%)**;
+- under-call regressions in the replay set: **0**.
+
+See [evaluation methodology](evals/README.md), [runtime replay results](evals/runtime-results-2026-07-14.md), and the earlier [matched Codex A/B trial](evals/results-2026-07-13.md). These are regression and directional results, not production success-rate or savings claims.
+
+## Honest limitations
+
+- Enforcement applies only where an application uses `GovernedRuntime`, `GovernedRunner`, or a supported SDK guardrail.
+- Codex hooks can observe and warn, but cannot currently provide the claimed universal veto.
+- The replay suite is deterministic and checked in; it is not a live production workload benchmark.
+- Fingerprints and objective hash references minimize stored content but are identifiers, not encryption. Review safe metadata before exporting a ledger.
+- Input-only function-tool guardrails record a conservative `started` state because they cannot know the eventual result.
 
 ## Validate locally
 
 ```bash
+python -m pip install -e .
 python -m unittest discover -s tests -v
 python evals/run_evals.py
+python evals/run_runtime_evals.py
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py agent-call-governor
+python -m build
 ```
 
-The policy itself has no runtime dependencies. The official Codex skill validator requires PyYAML.
-
-The [evaluation suite](evals/README.md) reports both `quality_preservation_rate` and `waste_control_rate`. This prevents call reduction from looking successful when it merely causes under-calling. These regression scores measure rule consistency, not a production success-rate claim. See the [latest checked-in results](evals/results-2026-07-13.md).
-
-In the first matched Codex A/B trial, both conditions completed 4/4 tasks. The balanced Governor reduced total calls from 9 to 3 while a blind judge preferred its answer quality (8.88 vs. 8.63). This is a single directional trial, not a production benchmark. The trial also exposed budget-history and high-risk retry edge cases, which are now covered by regression tests.
+The official Codex skill validator requires PyYAML. The build command requires the optional development dependencies: `python -m pip install -e ".[dev]"`.
 
 ## Project layout
 
 ```text
-agent-call-governor/     Codex-discoverable skill
-  agents/openai.yaml     Codex UI metadata
-  references/            On-demand proposal schema
-  scripts/governor.py    Optional deterministic gate
-examples/                Ready-to-run proposal input
-evals/                   Quality-preservation and waste-control cases
-tests/                   Standard-library unit tests
+agent-call-governor/
+  SKILL.md                         Codex policy instructions
+  references/                      Policy and integration guides
+  scripts/governor.py              Backward-compatible policy CLI
+  scripts/codex_hook.py            Codex stdin/stdout hook command
+  scripts/agent_call_governor_runtime/
+                                    Installable policy, ledger, runtime, adapters, CLI
+examples/                           Proposal and Codex hook configuration
+evals/                              Policy cases, runtime workloads, checked-in results
+tests/                              Dependency-free and optional-SDK tests
 ```
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep the core skill concise, add deterministic behavior to the helper when possible, and include tests for policy changes.
+Issues and pull requests are welcome. Preserve the quality floor, add tests for both over-calling and under-calling, and keep public claims tied to reproducible evidence.
 
 ## License
 

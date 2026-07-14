@@ -1,9 +1,11 @@
 import importlib.util
+import sys
 import unittest
 from pathlib import Path
 
 
 SCRIPT = Path(__file__).parents[1] / "agent-call-governor" / "scripts" / "governor.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("governor", SCRIPT)
 assert SPEC and SPEC.loader
 governor = importlib.util.module_from_spec(SPEC)
@@ -24,6 +26,13 @@ def proposal(**overrides):
 
 
 class GovernorTests(unittest.TestCase):
+    def test_packaged_policy_matches_legacy_module(self):
+        from agent_call_governor_runtime import evaluate, fingerprint
+
+        self.assertIs(evaluate, governor.evaluate)
+        self.assertIs(fingerprint, governor.fingerprint)
+        self.assertEqual(fingerprint(proposal()), governor.fingerprint(proposal()))
+
     def test_balanced_profile_is_default(self):
         result = governor.evaluate({"proposal": proposal()})
         self.assertTrue(result["allowed"])
@@ -99,14 +108,19 @@ class GovernorTests(unittest.TestCase):
         self.assertTrue(result["allowed"])
         self.assertEqual(result["reason"], "mandatory_exception")
 
-    def test_fingerprint_ignores_key_and_list_order_and_case(self):
-        left = proposal(material_inputs={"Files": ["B.py", "a.py"], "Query": " Find BUG "})
-        right = proposal(
-            objective="inspect AUTH failures",
-            route="SPECIALIST-agent",
-            material_inputs={"query": "find bug", "files": ["a.py", "b.py"]},
-        )
+    def test_fingerprint_ignores_only_object_key_order(self):
+        left = proposal(material_inputs={"files": ["B.py", "a.py"], "query": "Find BUG"})
+        right = proposal(material_inputs={"query": "Find BUG", "files": ["B.py", "a.py"]})
         self.assertEqual(governor.fingerprint(left), governor.fingerprint(right))
+
+    def test_fingerprint_preserves_list_order_and_string_case(self):
+        ordered = proposal(material_inputs={"steps": ["drop-old", "create-new"]})
+        reversed_steps = proposal(material_inputs={"steps": ["create-new", "drop-old"]})
+        upper_case = proposal(material_inputs={"branch": "Feature/A"})
+        lower_case = proposal(material_inputs={"branch": "feature/a"})
+
+        self.assertNotEqual(governor.fingerprint(ordered), governor.fingerprint(reversed_steps))
+        self.assertNotEqual(governor.fingerprint(upper_case), governor.fingerprint(lower_case))
 
     def test_blocks_exhausted_effective_budget(self):
         result = governor.evaluate({
