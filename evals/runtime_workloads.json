@@ -1,0 +1,2418 @@
+[
+  {
+    "name": "mandatory-preservation-01",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 1",
+          "route": "agent:baseline-1",
+          "material_inputs": {
+            "variant": 1,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 1",
+          "route": "agent:mandatory-1",
+          "material_inputs": {
+            "variant": 1,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "current_information"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-02",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 2",
+          "route": "agent:baseline-2",
+          "material_inputs": {
+            "variant": 2,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 2",
+          "route": "agent:mandatory-2",
+          "material_inputs": {
+            "variant": 2,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "explicit_verification"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-03",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 3",
+          "route": "agent:baseline-3",
+          "material_inputs": {
+            "variant": 3,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 3",
+          "route": "agent:mandatory-3",
+          "material_inputs": {
+            "variant": 3,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "high_stakes"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-04",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 4",
+          "route": "agent:baseline-4",
+          "material_inputs": {
+            "variant": 4,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 4",
+          "route": "agent:mandatory-4",
+          "material_inputs": {
+            "variant": 4,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "private_state"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-05",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 5",
+          "route": "agent:baseline-5",
+          "material_inputs": {
+            "variant": 5,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 5",
+          "route": "agent:mandatory-5",
+          "material_inputs": {
+            "variant": 5,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "missing_file"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-06",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 6",
+          "route": "agent:baseline-6",
+          "material_inputs": {
+            "variant": 6,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 6",
+          "route": "agent:mandatory-6",
+          "material_inputs": {
+            "variant": 6,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "user_requested_action"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-07",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 7",
+          "route": "agent:baseline-7",
+          "material_inputs": {
+            "variant": 7,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 7",
+          "route": "agent:mandatory-7",
+          "material_inputs": {
+            "variant": 7,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "safety"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-08",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 8",
+          "route": "agent:baseline-8",
+          "material_inputs": {
+            "variant": 8,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 8",
+          "route": "agent:mandatory-8",
+          "material_inputs": {
+            "variant": 8,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "system_instruction"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-09",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 9",
+          "route": "agent:baseline-9",
+          "material_inputs": {
+            "variant": 9,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 9",
+          "route": "agent:mandatory-9",
+          "material_inputs": {
+            "variant": 9,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "current_information"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-10",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 10",
+          "route": "agent:baseline-10",
+          "material_inputs": {
+            "variant": 10,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 10",
+          "route": "agent:mandatory-10",
+          "material_inputs": {
+            "variant": 10,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "explicit_verification"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-11",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 11",
+          "route": "agent:baseline-11",
+          "material_inputs": {
+            "variant": 11,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 11",
+          "route": "agent:mandatory-11",
+          "material_inputs": {
+            "variant": 11,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "high_stakes"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-12",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 12",
+          "route": "agent:baseline-12",
+          "material_inputs": {
+            "variant": 12,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 12",
+          "route": "agent:mandatory-12",
+          "material_inputs": {
+            "variant": 12,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "private_state"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-13",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 13",
+          "route": "agent:baseline-13",
+          "material_inputs": {
+            "variant": 13,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 13",
+          "route": "agent:mandatory-13",
+          "material_inputs": {
+            "variant": 13,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "missing_file"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-14",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 14",
+          "route": "agent:baseline-14",
+          "material_inputs": {
+            "variant": 14,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 14",
+          "route": "agent:mandatory-14",
+          "material_inputs": {
+            "variant": 14,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "user_requested_action"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-15",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 15",
+          "route": "agent:baseline-15",
+          "material_inputs": {
+            "variant": 15,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 15",
+          "route": "agent:mandatory-15",
+          "material_inputs": {
+            "variant": 15,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "safety"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "mandatory-preservation-16",
+    "category": "mandatory_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Prime the strict agent budget variant 16",
+          "route": "agent:baseline-16",
+          "material_inputs": {
+            "variant": 16,
+            "phase": "baseline"
+          },
+          "profile": "strict",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Perform mandatory follow-up variant 16",
+          "route": "agent:mandatory-16",
+          "material_inputs": {
+            "variant": 16,
+            "phase": "mandatory"
+          },
+          "profile": "strict",
+          "quality_risk": "medium",
+          "mandatory_reason": "system_instruction"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "mandatory_exception"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-01",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 1",
+          "route": "agent:first-strategy-1",
+          "material_inputs": {
+            "variant": 1,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 1",
+          "route": "agent:changed-strategy-1",
+          "material_inputs": {
+            "variant": 1,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 1"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-02",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 2",
+          "route": "agent:first-strategy-2",
+          "material_inputs": {
+            "variant": 2,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 2",
+          "route": "agent:changed-strategy-2",
+          "material_inputs": {
+            "variant": 2,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 2"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-03",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 3",
+          "route": "agent:first-strategy-3",
+          "material_inputs": {
+            "variant": 3,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 3",
+          "route": "agent:changed-strategy-3",
+          "material_inputs": {
+            "variant": 3,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 3"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-04",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 4",
+          "route": "agent:first-strategy-4",
+          "material_inputs": {
+            "variant": 4,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 4",
+          "route": "agent:changed-strategy-4",
+          "material_inputs": {
+            "variant": 4,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 4"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-05",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 5",
+          "route": "agent:first-strategy-5",
+          "material_inputs": {
+            "variant": 5,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 5",
+          "route": "agent:changed-strategy-5",
+          "material_inputs": {
+            "variant": 5,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 5"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-06",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 6",
+          "route": "agent:first-strategy-6",
+          "material_inputs": {
+            "variant": 6,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 6",
+          "route": "agent:changed-strategy-6",
+          "material_inputs": {
+            "variant": 6,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 6"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-07",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 7",
+          "route": "agent:first-strategy-7",
+          "material_inputs": {
+            "variant": 7,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 7",
+          "route": "agent:changed-strategy-7",
+          "material_inputs": {
+            "variant": 7,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 7"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-08",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 8",
+          "route": "agent:first-strategy-8",
+          "material_inputs": {
+            "variant": 8,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 8",
+          "route": "agent:changed-strategy-8",
+          "material_inputs": {
+            "variant": 8,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 8"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-09",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 9",
+          "route": "agent:first-strategy-9",
+          "material_inputs": {
+            "variant": 9,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 9",
+          "route": "agent:changed-strategy-9",
+          "material_inputs": {
+            "variant": 9,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 9"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-10",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 10",
+          "route": "agent:first-strategy-10",
+          "material_inputs": {
+            "variant": 10,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 10",
+          "route": "agent:changed-strategy-10",
+          "material_inputs": {
+            "variant": 10,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 10"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-11",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 11",
+          "route": "agent:first-strategy-11",
+          "material_inputs": {
+            "variant": 11,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 11",
+          "route": "agent:changed-strategy-11",
+          "material_inputs": {
+            "variant": 11,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 11"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-12",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 12",
+          "route": "agent:first-strategy-12",
+          "material_inputs": {
+            "variant": 12,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 12",
+          "route": "agent:changed-strategy-12",
+          "material_inputs": {
+            "variant": 12,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 12"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-13",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 13",
+          "route": "agent:first-strategy-13",
+          "material_inputs": {
+            "variant": 13,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 13",
+          "route": "agent:changed-strategy-13",
+          "material_inputs": {
+            "variant": 13,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 13"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-14",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 14",
+          "route": "agent:first-strategy-14",
+          "material_inputs": {
+            "variant": 14,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 14",
+          "route": "agent:changed-strategy-14",
+          "material_inputs": {
+            "variant": 14,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 14"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-15",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 15",
+          "route": "agent:first-strategy-15",
+          "material_inputs": {
+            "variant": 15,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 15",
+          "route": "agent:changed-strategy-15",
+          "material_inputs": {
+            "variant": 15,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 15"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "high-risk-retry-preservation-16",
+    "category": "high_risk_retry_preservation",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 16",
+          "route": "agent:first-strategy-16",
+          "material_inputs": {
+            "variant": 16,
+            "strategy": "first"
+          },
+          "profile": "strict",
+          "quality_risk": "high"
+        },
+        "progress": "low_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Investigate high-risk failure variant 16",
+          "route": "agent:changed-strategy-16",
+          "material_inputs": {
+            "variant": 16,
+            "strategy": "changed"
+          },
+          "profile": "strict",
+          "quality_risk": "high",
+          "changed_strategy": "Use independent evidence source 16"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-01",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 1",
+          "route": "tool:lookup-1",
+          "material_inputs": {
+            "variant": 1,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 1",
+          "route": "tool:lookup-1",
+          "material_inputs": {
+            "variant": 1,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-02",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 2",
+          "route": "tool:lookup-2",
+          "material_inputs": {
+            "variant": 2,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 2",
+          "route": "tool:lookup-2",
+          "material_inputs": {
+            "variant": 2,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-03",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 3",
+          "route": "tool:lookup-3",
+          "material_inputs": {
+            "variant": 3,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 3",
+          "route": "tool:lookup-3",
+          "material_inputs": {
+            "variant": 3,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-04",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 4",
+          "route": "tool:lookup-4",
+          "material_inputs": {
+            "variant": 4,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 4",
+          "route": "tool:lookup-4",
+          "material_inputs": {
+            "variant": 4,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-05",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 5",
+          "route": "tool:lookup-5",
+          "material_inputs": {
+            "variant": 5,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 5",
+          "route": "tool:lookup-5",
+          "material_inputs": {
+            "variant": 5,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-06",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 6",
+          "route": "tool:lookup-6",
+          "material_inputs": {
+            "variant": 6,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 6",
+          "route": "tool:lookup-6",
+          "material_inputs": {
+            "variant": 6,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-07",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 7",
+          "route": "tool:lookup-7",
+          "material_inputs": {
+            "variant": 7,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 7",
+          "route": "tool:lookup-7",
+          "material_inputs": {
+            "variant": 7,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-08",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 8",
+          "route": "tool:lookup-8",
+          "material_inputs": {
+            "variant": 8,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 8",
+          "route": "tool:lookup-8",
+          "material_inputs": {
+            "variant": 8,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-09",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 9",
+          "route": "tool:lookup-9",
+          "material_inputs": {
+            "variant": 9,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 9",
+          "route": "tool:lookup-9",
+          "material_inputs": {
+            "variant": 9,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-10",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 10",
+          "route": "tool:lookup-10",
+          "material_inputs": {
+            "variant": 10,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 10",
+          "route": "tool:lookup-10",
+          "material_inputs": {
+            "variant": 10,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-11",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 11",
+          "route": "tool:lookup-11",
+          "material_inputs": {
+            "variant": 11,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 11",
+          "route": "tool:lookup-11",
+          "material_inputs": {
+            "variant": 11,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-12",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 12",
+          "route": "tool:lookup-12",
+          "material_inputs": {
+            "variant": 12,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 12",
+          "route": "tool:lookup-12",
+          "material_inputs": {
+            "variant": 12,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-13",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 13",
+          "route": "tool:lookup-13",
+          "material_inputs": {
+            "variant": 13,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 13",
+          "route": "tool:lookup-13",
+          "material_inputs": {
+            "variant": 13,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-14",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 14",
+          "route": "tool:lookup-14",
+          "material_inputs": {
+            "variant": 14,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 14",
+          "route": "tool:lookup-14",
+          "material_inputs": {
+            "variant": 14,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-15",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 15",
+          "route": "tool:lookup-15",
+          "material_inputs": {
+            "variant": 15,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 15",
+          "route": "tool:lookup-15",
+          "material_inputs": {
+            "variant": 15,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "duplicate-blocking-16",
+    "category": "duplicate_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 16",
+          "route": "tool:lookup-16",
+          "material_inputs": {
+            "variant": 16,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "progress": "material_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Look up duplicate candidate variant 16",
+          "route": "tool:lookup-16",
+          "material_inputs": {
+            "variant": 16,
+            "query": "same"
+          },
+          "budget_kind": "direct-tool",
+          "profile": "balanced",
+          "quality_risk": "medium"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "duplicate_fingerprint"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-01",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 1",
+          "route": "tool:primary-source-1",
+          "material_inputs": {
+            "variant": 1,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 1",
+          "route": "tool:cosmetic-source-1",
+          "material_inputs": {
+            "variant": 1,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-02",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 2",
+          "route": "tool:primary-source-2",
+          "material_inputs": {
+            "variant": 2,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 2",
+          "route": "tool:cosmetic-source-2",
+          "material_inputs": {
+            "variant": 2,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-03",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 3",
+          "route": "tool:primary-source-3",
+          "material_inputs": {
+            "variant": 3,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 3",
+          "route": "tool:cosmetic-source-3",
+          "material_inputs": {
+            "variant": 3,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-04",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 4",
+          "route": "tool:primary-source-4",
+          "material_inputs": {
+            "variant": 4,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 4",
+          "route": "tool:cosmetic-source-4",
+          "material_inputs": {
+            "variant": 4,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-05",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 5",
+          "route": "tool:primary-source-5",
+          "material_inputs": {
+            "variant": 5,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 5",
+          "route": "tool:cosmetic-source-5",
+          "material_inputs": {
+            "variant": 5,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-06",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 6",
+          "route": "tool:primary-source-6",
+          "material_inputs": {
+            "variant": 6,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 6",
+          "route": "tool:cosmetic-source-6",
+          "material_inputs": {
+            "variant": 6,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-07",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 7",
+          "route": "tool:primary-source-7",
+          "material_inputs": {
+            "variant": 7,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 7",
+          "route": "tool:cosmetic-source-7",
+          "material_inputs": {
+            "variant": 7,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "satisfied-stop-blocking-08",
+    "category": "satisfied_stop_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Resolve stop condition variant 8",
+          "route": "tool:primary-source-8",
+          "material_inputs": {
+            "variant": 8,
+            "source": "primary"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "progress": "sufficient",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Add cosmetic confirmation variant 8",
+          "route": "tool:cosmetic-source-8",
+          "material_inputs": {
+            "variant": 8,
+            "source": "cosmetic"
+          },
+          "budget_kind": "direct-tool"
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "stop_condition_already_satisfied"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-01",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 1",
+          "route": "agent:exhausted-1",
+          "material_inputs": {
+            "variant": 1,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 1",
+          "route": "agent:exhausted-alternative-1",
+          "material_inputs": {
+            "variant": 1,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-02",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 2",
+          "route": "agent:exhausted-2",
+          "material_inputs": {
+            "variant": 2,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 2",
+          "route": "agent:exhausted-alternative-2",
+          "material_inputs": {
+            "variant": 2,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-03",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 3",
+          "route": "agent:exhausted-3",
+          "material_inputs": {
+            "variant": 3,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 3",
+          "route": "agent:exhausted-alternative-3",
+          "material_inputs": {
+            "variant": 3,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-04",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 4",
+          "route": "agent:exhausted-4",
+          "material_inputs": {
+            "variant": 4,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 4",
+          "route": "agent:exhausted-alternative-4",
+          "material_inputs": {
+            "variant": 4,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-05",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 5",
+          "route": "agent:exhausted-5",
+          "material_inputs": {
+            "variant": 5,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 5",
+          "route": "agent:exhausted-alternative-5",
+          "material_inputs": {
+            "variant": 5,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-06",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 6",
+          "route": "agent:exhausted-6",
+          "material_inputs": {
+            "variant": 6,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 6",
+          "route": "agent:exhausted-alternative-6",
+          "material_inputs": {
+            "variant": 6,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-07",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 7",
+          "route": "agent:exhausted-7",
+          "material_inputs": {
+            "variant": 7,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 7",
+          "route": "agent:exhausted-alternative-7",
+          "material_inputs": {
+            "variant": 7,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  },
+  {
+    "name": "no-progress-blocking-08",
+    "category": "no_progress_blocking",
+    "steps": [
+      {
+        "proposal": {
+          "objective": "Attempt exhausted route variant 8",
+          "route": "agent:exhausted-8",
+          "material_inputs": {
+            "variant": 8,
+            "attempt": "first"
+          }
+        },
+        "progress": "no_progress",
+        "expected": "execute",
+        "label": "necessary",
+        "expected_reason": "allowed"
+      },
+      {
+        "proposal": {
+          "objective": "Repeat exhausted route variant 8",
+          "route": "agent:exhausted-alternative-8",
+          "material_inputs": {
+            "variant": 8,
+            "attempt": "second"
+          }
+        },
+        "expected": "block",
+        "label": "redundant",
+        "expected_reason": "no_progress_stop"
+      }
+    ]
+  }
+]

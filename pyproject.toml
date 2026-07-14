@@ -22,6 +22,7 @@ Issues = "https://github.com/Kimuhwan/Agent-Call-Governor/issues"
 
 [project.scripts]
 agent-call-governor = "agent_call_governor_runtime.policy:main"
+agent-call-governor-runtime = "agent_call_governor_runtime.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["agent-call-governor/scripts"]

@@ -31,6 +31,15 @@ Codex asks you to review and trust a new or changed command hook before it runs.
 The same command handles all four events:
 
 ```powershell
+agent-call-governor-runtime codex-hook `
+  --mode observe `
+  --db C:\absolute\governor-data\events.sqlite3 `
+  --jsonl C:\absolute\governor-data\events.jsonl
+```
+
+When the runtime package is not installed as a command, use the script directly:
+
+```powershell
 python C:\absolute\Agent-Call-Governor\agent-call-governor\scripts\codex_hook.py `
   --mode observe `
   --db C:\absolute\governor-data\events.sqlite3 `
