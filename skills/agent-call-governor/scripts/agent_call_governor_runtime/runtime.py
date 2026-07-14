@@ -111,8 +111,14 @@ class GovernedRuntime:
         event_source: str,
         atomic_transition: Callable[..., RuntimeDecision],
     ) -> RuntimeDecision:
+        proposal_fingerprint = proposal.fingerprint
+
         def operation(history: list[dict[str, str]]) -> tuple[RuntimeDecision, list[CallEvent]]:
-            decision = self._decide(proposal, history=history)
+            decision = self._decide(
+                proposal,
+                history=history,
+                proposal_fingerprint=proposal_fingerprint,
+            )
             decision_metadata = dict(decision.context)
             events = [
                 self._event(
@@ -145,7 +151,7 @@ class GovernedRuntime:
                 raise GovernanceInternalError(
                     f"Agent Call Governor ledger failed during call reservation: {type(exc).__name__}"
                 ) from exc
-            return self._internal_decision(proposal, exc, fail_open=True)
+            return self._internal_decision(proposal_fingerprint, exc, fail_open=True)
 
     def _non_atomic_begin(
         self,
@@ -356,7 +362,10 @@ class GovernedRuntime:
         proposal: CallProposal,
         *,
         history: list[dict[str, str]] | None = None,
+        proposal_fingerprint: str | None = None,
     ) -> RuntimeDecision:
+        if proposal_fingerprint is None:
+            proposal_fingerprint = proposal.fingerprint
         try:
             if history is None:
                 history = self.ledger.history(proposal.session_id)
@@ -371,7 +380,7 @@ class GovernedRuntime:
                 raise TypeError("policy result reason must be a non-empty string")
             reason = reason.strip()
             policy_fp = raw.get("fingerprint")
-            if not isinstance(policy_fp, str) or policy_fp != proposal.fingerprint:
+            if not isinstance(policy_fp, str) or policy_fp != proposal_fingerprint:
                 raise ValueError("policy fingerprint must match the canonical proposal fingerprint")
             remaining = raw.get("remaining_after_call")
             if remaining is not None and (
@@ -394,11 +403,11 @@ class GovernedRuntime:
             )
         except Exception as exc:
             fail_open = self.failure_policy == "fail-open"
-            return self._internal_decision(proposal, exc, fail_open=fail_open)
+            return self._internal_decision(proposal_fingerprint, exc, fail_open=fail_open)
 
     @staticmethod
     def _internal_decision(
-        proposal: CallProposal,
+        proposal_fingerprint: str,
         error: BaseException,
         *,
         fail_open: bool,
@@ -407,7 +416,7 @@ class GovernedRuntime:
             policy_allowed=False,
             execution_allowed=fail_open,
             reason="internal_error_fail_open" if fail_open else "internal_error_fail_closed",
-            fingerprint=proposal.fingerprint,
+            fingerprint=proposal_fingerprint,
             context={"internal_error_type": type(error).__name__},
         )
 

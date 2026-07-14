@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from agent_call_governor_runtime import CallProposal, fingerprint as policy_fingerprint
 from agent_call_governor_runtime.fingerprint import FINGERPRINT_VERSION, build_fingerprint
 
 
@@ -15,6 +16,20 @@ class FingerprintTests(unittest.TestCase):
             tool_version="host-v1",
             state_token=state,
         )
+
+    @staticmethod
+    def proposal(**overrides) -> CallProposal:
+        values = {
+            "session_id": "fingerprint-session",
+            "objective": "Verify a release candidate",
+            "route": "mcp:lookup",
+            "capability_gap": "Release evidence is missing",
+            "expected_new_information": "The verified release state",
+            "stop_condition": "The release state is verified",
+            "material_inputs": {"release": "v0.3.0"},
+        }
+        values.update(overrides)
+        return CallProposal(**values)
 
     def test_object_key_order_is_equivalent(self) -> None:
         self.assertEqual(self.build("mcp:lookup", {"a": 1, "b": 2}).digest,
@@ -54,6 +69,94 @@ class FingerprintTests(unittest.TestCase):
         self.assertTrue(result.input_digest.startswith("sha256:"))
         self.assertTrue(result.objective_digest.startswith("sha256:"))
         self.assertNotIn("private customer", repr(result))
+
+    def test_optional_fingerprint_context_requires_text_or_none(self) -> None:
+        for field_name in ("cwd", "tool_version", "state_token"):
+            with self.subTest(boundary="builder", field=field_name):
+                with self.assertRaisesRegex(ValueError, rf"{field_name} must be a string or null"):
+                    build_fingerprint(
+                        objective="Verify a release candidate",
+                        route="mcp:lookup",
+                        material_inputs={},
+                        **{field_name: 1},
+                    )
+            with self.subTest(boundary="model", field=field_name):
+                with self.assertRaisesRegex(ValueError, rf"{field_name} must be a string or null"):
+                    self.proposal(metadata={field_name: 1})
+
+    def test_public_builder_rejects_non_mapping_material_inputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "material_inputs must be an object"):
+            build_fingerprint(
+                objective="Verify a release candidate",
+                route="mcp:lookup",
+                material_inputs=[],
+            )
+
+    def test_public_builder_rejects_utf8_unencodable_text(self) -> None:
+        base = {
+            "objective": "Verify a release candidate",
+            "route": "mcp:lookup",
+            "material_inputs": {},
+        }
+        cases = {
+            "objective": {**base, "objective": "\ud800"},
+            "route": {**base, "route": "\ud800"},
+            "cwd": {**base, "cwd": "\ud800"},
+            "tool_version": {**base, "tool_version": "\ud800"},
+            "state_token": {**base, "state_token": "\ud800"},
+            "material_inputs": {**base, "material_inputs": {"nested": ["\ud800"]}},
+        }
+        for field_name, arguments in cases.items():
+            with self.subTest(field=field_name):
+                with self.assertRaisesRegex(ValueError, rf"{field_name}.*UTF-8"):
+                    build_fingerprint(**arguments)
+
+    def test_call_proposal_rejects_utf8_unencodable_fingerprint_input(self) -> None:
+        with self.assertRaisesRegex(ValueError, r"material_inputs.*UTF-8"):
+            self.proposal(material_inputs={"nested": ["\ud800"]})
+        with self.assertRaisesRegex(ValueError, r"metadata.*UTF-8"):
+            self.proposal(metadata={"state_token": "\ud800"})
+
+    def test_call_proposal_caches_metadata_aware_policy_fingerprint(self) -> None:
+        metadata = {
+            "cwd": "C:/repo",
+            "tool_version": "host-v1",
+            "state_token": "after-read",
+        }
+        proposal = self.proposal(metadata=metadata)
+
+        self.assertIs(proposal.fingerprint_result, proposal.fingerprint_result)
+        self.assertEqual(proposal.fingerprint, proposal.fingerprint_result.digest)
+        self.assertEqual(proposal.fingerprint, policy_fingerprint(proposal.to_policy_proposal()))
+
+        replacements = {
+            "cwd": "C:/other",
+            "tool_version": "host-v2",
+            "state_token": "after-write",
+        }
+        for field_name, replacement in replacements.items():
+            with self.subTest(field=field_name):
+                changed = self.proposal(metadata={**metadata, field_name: replacement})
+                self.assertNotEqual(proposal.fingerprint, changed.fingerprint)
+
+    def test_v2_golden_digest_is_stable(self) -> None:
+        result = build_fingerprint(
+            objective="Verify a release candidate",
+            route="Bash",
+            material_inputs={
+                "command": "git status",
+                "paths": ["B.py", "a.py"],
+                "call_id": "tool-7",
+            },
+            cwd="C:/repo",
+            tool_version="host-v1",
+            state_token="after-read",
+        )
+
+        self.assertEqual(
+            result.digest,
+            "sha256:b6064d6206c4d96bb94cd6dd3ad80a3f239d0af8f80e9d13a096a04b078f3f71",
+        )
 
 
 if __name__ == "__main__":

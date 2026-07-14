@@ -433,6 +433,39 @@ class GovernedRuntimeTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(self.ledger.events("session-1")[-1].phase, "blocked")
 
+    def test_internal_policy_failure_uses_precomputed_fingerprint(self):
+        for failure_policy in ("fail-open", "fail-closed"):
+            with self.subTest(failure_policy=failure_policy):
+                session_id = f"internal-{failure_policy}"
+                proposal = self.proposal(session_id=session_id)
+                expected_fingerprint = proposal.fingerprint
+
+                def broken_policy(_document):
+                    proposal.metadata["state_token"] = 1
+                    raise RuntimeError("policy unavailable")
+
+                runtime = GovernedRuntime(
+                    self.ledger,
+                    mode="enforce",
+                    failure_policy=failure_policy,
+                    policy_evaluator=broken_policy,
+                )
+
+                if failure_policy == "fail-open":
+                    self.assertEqual(runtime.run(proposal, lambda: "fallback"), "fallback")
+                    expected_phases = ["proposed", "started", "completed"]
+                else:
+                    with self.assertRaisesRegex(GovernanceBlocked, "internal_error_fail_closed"):
+                        runtime.run(proposal, lambda: "must-not-run")
+                    expected_phases = ["proposed", "blocked"]
+
+                events = self.ledger.events(session_id)
+                self.assertEqual([event.phase for event in events], expected_phases)
+                self.assertTrue(all(event.fingerprint == expected_fingerprint for event in events))
+                self.assertTrue(
+                    all(event.metadata["internal_error_type"] == "RuntimeError" for event in events[:2])
+                )
+
     def test_malformed_policy_boolean_cannot_be_coerced_to_allow(self):
         def malformed_policy(document):
             return {

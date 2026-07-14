@@ -55,7 +55,10 @@ def _json_object(value: Mapping[str, Any], field_name: str) -> dict[str, Any]:
         raise ValueError(f"{field_name} must be an object")
     try:
         encoded = json.dumps(dict(value), ensure_ascii=False, allow_nan=False)
+        encoded.encode("utf-8")
         decoded = json.loads(encoded)
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} must contain only UTF-8-encodable text") from exc
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be JSON-compatible") from exc
     if not isinstance(decoded, dict):  # defensive; Mapping always encodes as an object
@@ -84,6 +87,7 @@ class CallProposal:
     changed_strategy: str | None = None
     parent_call_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    _fingerprint_result: FingerprintResult = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for name in (
@@ -114,6 +118,18 @@ class CallProposal:
             object.__setattr__(self, "parent_call_id", _nonempty(self.parent_call_id, "parent_call_id"))
         object.__setattr__(self, "material_inputs", _json_object(self.material_inputs, "material_inputs"))
         object.__setattr__(self, "metadata", _json_object(self.metadata, "metadata"))
+        object.__setattr__(
+            self,
+            "_fingerprint_result",
+            build_fingerprint(
+                objective=self.objective,
+                route=self.route,
+                material_inputs=self.material_inputs,
+                cwd=self.metadata.get("cwd"),
+                tool_version=self.metadata.get("tool_version"),
+                state_token=self.metadata.get("state_token"),
+            ),
+        )
 
     @property
     def fingerprint(self) -> str:
@@ -121,14 +137,7 @@ class CallProposal:
 
     @property
     def fingerprint_result(self) -> FingerprintResult:
-        return build_fingerprint(
-            objective=self.objective,
-            route=self.route,
-            material_inputs=self.material_inputs,
-            cwd=self.metadata.get("cwd"),
-            tool_version=self.metadata.get("tool_version"),
-            state_token=self.metadata.get("state_token"),
-        )
+        return self._fingerprint_result
 
     def to_policy_proposal(self) -> dict[str, Any]:
         value: dict[str, Any] = {
