@@ -18,6 +18,7 @@ from .policy import (
     PROGRESS_VALUES,
     RISK_VALUES,
 )
+from .redaction import sanitize_metadata
 
 
 EVENT_PHASES = {"proposed", "blocked", "started", "completed", "failed", "cancelled"}
@@ -243,7 +244,14 @@ class CallEvent:
             raise ValueError("duration_ms must be non-negative")
         if not isinstance(self.schema_version, int) or self.schema_version < 1:
             raise ValueError("schema_version must be a positive integer")
-        object.__setattr__(self, "metadata", _json_object(self.metadata, "metadata"))
+        object.__setattr__(
+            self,
+            "metadata",
+            sanitize_metadata(
+                _json_object(self.metadata, "metadata"),
+                source=self.source,
+            ),
+        )
 
     @classmethod
     def create(cls, **values: Any) -> "CallEvent":

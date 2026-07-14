@@ -16,6 +16,7 @@ from typing import Any
 from .codex_hook import main as codex_hook_main
 from .ledger import CallLedger
 from .models import CallEvent
+from .redaction import sanitize_event_dict
 
 
 def build_report(events: list[CallEvent]) -> dict[str, Any]:
@@ -85,7 +86,7 @@ def export_jsonl(events: list[CallEvent], output_path: Path, database_path: Path
             for event in events:
                 stream.write(
                     json.dumps(
-                        event.to_dict(),
+                        sanitize_event_dict(event.to_dict()),
                         ensure_ascii=False,
                         sort_keys=True,
                         separators=(",", ":"),

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import sqlite3
 import sys
 import tempfile
@@ -414,7 +416,12 @@ class GovernedRuntimeTests(unittest.TestCase):
         self.assertEqual(result, "fallback")
         proposed = self.ledger.events("session-1")[0]
         self.assertEqual(proposed.decision_reason, "internal_error_fail_open")
-        self.assertEqual(proposed.metadata["internal_error_type"], "RuntimeError")
+        key = "custom:" + hashlib.sha256(b"internal_error_type").hexdigest()
+        value = "sha256:" + hashlib.sha256(b"RuntimeError").hexdigest()
+        self.assertEqual(proposed.metadata, {key: value})
+        encoded_metadata = json.dumps(proposed.metadata, sort_keys=True)
+        self.assertNotIn("internal_error_type", encoded_metadata)
+        self.assertNotIn("RuntimeError", encoded_metadata)
 
     def test_fail_closed_blocks_when_policy_evaluation_crashes(self):
         def broken_policy(_document):
@@ -462,9 +469,13 @@ class GovernedRuntimeTests(unittest.TestCase):
                 events = self.ledger.events(session_id)
                 self.assertEqual([event.phase for event in events], expected_phases)
                 self.assertTrue(all(event.fingerprint == expected_fingerprint for event in events))
-                self.assertTrue(
-                    all(event.metadata["internal_error_type"] == "RuntimeError" for event in events[:2])
-                )
+                key = "custom:" + hashlib.sha256(b"internal_error_type").hexdigest()
+                value = "sha256:" + hashlib.sha256(b"RuntimeError").hexdigest()
+                for event in events[:2]:
+                    self.assertEqual(event.metadata[key], value)
+                    encoded_metadata = json.dumps(event.metadata, sort_keys=True)
+                    self.assertNotIn("internal_error_type", encoded_metadata)
+                    self.assertNotIn("RuntimeError", encoded_metadata)
 
     def test_malformed_policy_boolean_cannot_be_coerced_to_allow(self):
         def malformed_policy(document):

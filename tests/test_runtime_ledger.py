@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import tempfile
@@ -142,7 +143,11 @@ class RuntimeLedgerTests(unittest.TestCase):
         decoded = [json.loads(line) for line in lines]
 
         self.assertEqual(len(decoded), 2)
-        self.assertEqual(decoded[0]["metadata"], {"safe": "value"})
+        key = "custom:" + hashlib.sha256(b"safe").hexdigest()
+        value = "sha256:" + hashlib.sha256(b"value").hexdigest()
+        self.assertEqual(decoded[0]["metadata"], {key: value})
+        self.assertNotIn("safe", lines[0])
+        self.assertNotIn("value", lines[0])
 
     def test_raw_proposal_text_is_not_part_of_events(self):
         objective_canary = "OBJECTIVE-CANARY-should-never-be-persisted"

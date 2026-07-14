@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 from .models import CallEvent
+from .redaction import sanitize_metadata
 
 
 _COUNTED_PHASES = ("started", "completed", "failed")
@@ -193,7 +194,11 @@ class CallLedger:
                 event.progress,
                 event.duration_ms,
                 event.source,
-                json.dumps(dict(event.metadata), ensure_ascii=False, sort_keys=True),
+                json.dumps(
+                    sanitize_metadata(event.metadata, source=event.source),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
                 event.error_type,
             ),
         )
@@ -201,15 +206,18 @@ class CallLedger:
     def _append_jsonl(self, events: Sequence[CallEvent]) -> None:
         if self.jsonl_path is None:
             return
-        encoded = [
-            json.dumps(
-                event.to_dict(),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
+        encoded = []
+        for event in events:
+            value = event.to_dict()
+            value["metadata"] = sanitize_metadata(event.metadata, source=event.source)
+            encoded.append(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
             )
-            for event in events
-        ]
         with self._jsonl_lock:
             with self.jsonl_path.open("a", encoding="utf-8", newline="\n") as stream:
                 for line in encoded:
