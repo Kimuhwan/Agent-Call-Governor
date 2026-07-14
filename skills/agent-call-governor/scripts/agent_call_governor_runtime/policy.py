@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
 from typing import Any, Sequence
+
+from .fingerprint import build_fingerprint
 
 
 PROGRESS_VALUES = {"sufficient", "material_progress", "low_progress", "no_progress"}
@@ -51,19 +52,17 @@ REQUIRED_FIELDS = (
 
 
 def fingerprint(proposal: dict[str, Any]) -> str:
-    identity = {
-        "objective": proposal.get("objective", ""),
-        "route": proposal.get("route", ""),
-        "material_inputs": proposal.get("material_inputs", {}),
-    }
-    canonical = json.dumps(
-        identity,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    metadata = proposal.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return build_fingerprint(
+        objective=proposal.get("objective", ""),
+        route=proposal.get("route", ""),
+        material_inputs=proposal.get("material_inputs", {}),
+        cwd=proposal.get("cwd", metadata.get("cwd")),
+        tool_version=proposal.get("tool_version", metadata.get("tool_version")),
+        state_token=proposal.get("state_token", metadata.get("state_token")),
+    ).digest
 
 
 def _nonempty(value: Any) -> bool:

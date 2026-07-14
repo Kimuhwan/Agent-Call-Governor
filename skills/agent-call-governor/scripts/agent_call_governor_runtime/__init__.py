@@ -6,6 +6,7 @@ from .agents_sdk import (
     build_function_tool_guardrail,
     build_run_hooks,
 )
+from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerprint
 from .ledger import CallLedger
 from .models import CallEvent, CallHandle, CallProposal, RuntimeDecision
 from .policy import evaluate, fingerprint
@@ -16,6 +17,8 @@ __all__ = [
     "CallHandle",
     "CallLedger",
     "CallProposal",
+    "FINGERPRINT_VERSION",
+    "FingerprintResult",
     "GovernedRuntime",
     "GovernedRunner",
     "GovernanceBlocked",
@@ -24,6 +27,7 @@ __all__ = [
     "RuntimeDecision",
     "SDKHookCall",
     "build_function_tool_guardrail",
+    "build_fingerprint",
     "build_run_hooks",
     "evaluate",
     "fingerprint",

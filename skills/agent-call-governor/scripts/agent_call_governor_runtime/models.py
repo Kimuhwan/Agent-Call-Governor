@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
+from .fingerprint import FingerprintResult, build_fingerprint
 from .policy import (
     BUDGET_KINDS,
     MANDATORY_REASONS,
     PROFILE_NAMES,
     PROGRESS_VALUES,
     RISK_VALUES,
-    fingerprint as policy_fingerprint,
 )
 
 
@@ -117,7 +117,18 @@ class CallProposal:
 
     @property
     def fingerprint(self) -> str:
-        return policy_fingerprint(self.to_policy_proposal())
+        return self.fingerprint_result.digest
+
+    @property
+    def fingerprint_result(self) -> FingerprintResult:
+        return build_fingerprint(
+            objective=self.objective,
+            route=self.route,
+            material_inputs=self.material_inputs,
+            cwd=self.metadata.get("cwd"),
+            tool_version=self.metadata.get("tool_version"),
+            state_token=self.metadata.get("state_token"),
+        )
 
     def to_policy_proposal(self) -> dict[str, Any]:
         value: dict[str, Any] = {
@@ -132,6 +143,13 @@ class CallProposal:
             value["mandatory_reason"] = self.mandatory_reason
         if self.changed_strategy is not None:
             value["changed_strategy"] = self.changed_strategy
+        fingerprint_metadata = {
+            key: self.metadata[key]
+            for key in ("cwd", "tool_version", "state_token")
+            if key in self.metadata
+        }
+        if fingerprint_metadata:
+            value["metadata"] = fingerprint_metadata
         return value
 
     def to_policy_document(self, history: Iterable[dict[str, Any]]) -> dict[str, Any]:
