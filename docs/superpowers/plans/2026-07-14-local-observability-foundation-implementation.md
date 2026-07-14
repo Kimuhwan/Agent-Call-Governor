@@ -770,11 +770,13 @@ Expected: all tests PASS; the canary strings are absent from stored and exported
 - Create: `tests/test_schema_migration.py`
 - Modify: `skills/agent-call-governor/scripts/agent_call_governor_runtime/models.py`
 - Modify: `skills/agent-call-governor/scripts/agent_call_governor_runtime/ledger.py`
+- Modify: `skills/agent-call-governor/scripts/agent_call_governor_runtime/policy.py`
 - Modify: `tests/test_runtime_ledger.py`
+- Modify: `tests/test_governor.py`
 
 **Interfaces:**
 - Consumes: v0.2 `call_events` databases with `PRAGMA user_version = 0` and current known columns.
-- Produces: `SCHEMA_VERSION`, `POLICY_VERSION`, `POLICY_FACTS_VERSION`, canonical event fields, ordered migration, and future-version rejection.
+- Produces: `SCHEMA_VERSION`, `POLICY_VERSION`, `POLICY_FACTS_VERSION`, canonical event fields, ordered migration, future-version rejection, and an explicit legacy-v1/current-v2 duplicate boundary.
 
 - [ ] **Step 1: Write fresh-schema, migration, reopen, future-version, and privacy tests**
 
@@ -851,7 +853,7 @@ class SchemaMigrationTests(unittest.TestCase):
         events = ledger.events()
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].event_type, "call.completed")
-        self.assertEqual(events[0].fingerprint_version, 2)
+        self.assertEqual(events[0].fingerprint_version, 1)
         self.assertEqual(events[0].policy_version, "legacy-v0.2")
         self.assertNotIn("private legacy value", self.path.read_bytes().decode("utf-8", errors="ignore"))
 
@@ -860,6 +862,12 @@ class SchemaMigrationTests(unittest.TestCase):
         CallLedger(self.path)
         CallLedger(self.path)
         self.assertEqual(len(CallLedger(self.path).events()), 1)
+
+    def test_migrated_fingerprint_version_is_exposed_in_history(self) -> None:
+        create_v02_database(self.path)
+        ledger = CallLedger(self.path)
+        history = ledger.history("session-ref")
+        self.assertEqual(history[0]["fingerprint_version"], 1)
 
     def test_unknown_future_schema_is_rejected(self) -> None:
         connection = sqlite3.connect(self.path)
@@ -1030,9 +1038,11 @@ LEGACY_EVENT_TYPES = {
 }
 ```
 
-Backfill `observed_at = occurred_at`, `trace_id = session_id`, `span_id = call_id`, `source_event = 'legacy'`, `fingerprint_version = 2`, `failure_policy = 'legacy-unknown'`, `policy_version = 'legacy-v0.2'`, and `raw_input_stored = 0`. Enable `PRAGMA secure_delete = ON` before rewriting every `metadata_json` through the Python sanitizer, write the safe result to both `metadata_json` and `safe_metadata_json`, and never synthesize `call.proposed` rows. After the migration transaction commits, run `PRAGMA wal_checkpoint(TRUNCATE)` and `VACUUM` outside the transaction so the released v0.2 plaintext canary is absent from database, WAL, and free pages.
+Backfill `observed_at = occurred_at`, `trace_id = session_id`, `span_id = call_id`, `source_event = 'legacy'`, `fingerprint_version = 1`, `failure_policy = 'legacy-unknown'`, `policy_version = 'legacy-v0.2'`, and `raw_input_stored = 0`. Version 1 is an honest marker for the released v0.2 identity algorithm; never rewrite the digest or label it v2 because raw identity inputs are intentionally unavailable. Enable `PRAGMA secure_delete = ON` before rewriting every `metadata_json` through the Python sanitizer, write the safe result to both `metadata_json` and `safe_metadata_json`, and never synthesize `call.proposed` rows. After the migration transaction commits, run `PRAGMA wal_checkpoint(TRUNCATE)` and `VACUUM` outside the transaction so the released v0.2 plaintext canary is absent from database, WAL, and free pages.
 
-Create both JSON Schemas with `additionalProperties: false`, required privacy flag `raw_input_stored` fixed to `false`, the ten event types, SHA-256 string patterns, nullable usage fields, `safe_metadata_json` and `policy_facts_json` object fields, and the exact policy-facts fields from Task 6. Add a schema test that loads both files with `json.loads`, runs `jsonschema.Draft202012Validator.check_schema`, validates a fresh event's `to_dict()` against `event-v2.schema.json`, and validates its `policy_facts_json` against `policy-facts-v1.schema.json`.
+Include `fingerprint_version` in ledger history only when the stored column is non-null. Update policy duplicate lookup so a matching-budget history entry always contributes to `matching_history_count` and progress, while it enters the exact-duplicate set only when `fingerprint_version` is absent (pre-1.0 in-memory compatibility) or equals `FINGERPRINT_VERSION`. Add a governor regression where a version-1 history fingerprint equals the current v2 digest: the call is not blocked as `duplicate_fingerprint`, but the legacy row still consumes one budget unit. Keep the existing missing-version and explicit-v2 duplicate tests blocking as before.
+
+Create both JSON Schemas with `additionalProperties: false`, required privacy flag `raw_input_stored` fixed to `false`, the ten event types, SHA-256 string patterns, event `fingerprint_version` restricted to `null`, `1`, or `2`, nullable usage fields, `safe_metadata_json` and `policy_facts_json` object fields, and the exact policy-facts fields from Task 6. Policy facts describe new proposals and therefore require version 2. Add a schema test that loads both files with `json.loads`, runs `jsonschema.Draft202012Validator.check_schema`, validates a fresh event's `to_dict()` against `event-v2.schema.json`, and validates its `policy_facts_json` against `policy-facts-v1.schema.json`.
 
 - [ ] **Step 4: Run schema, ledger, and privacy regressions**
 
@@ -2055,7 +2065,7 @@ Primary install instructions are:
 
 State that app installation is the supported interactive path, hooks require trust, state stays under `PLUGIN_DATA` unless the user explicitly overrides the database, the companion wheel is required for global console commands, and skill-only installers are compatibility-only. Update those installers to copy `skills/agent-call-governor` and document Windows as `powershell -ExecutionPolicy Bypass -File .\install.ps1`. Document separate plugin disable/remove, wheel upgrade/uninstall, and database retention/deletion commands so removing one surface is not misrepresented as removing the others.
 
-Write `docs/architecture.md` with data flow `Codex event -> dispatcher -> normalizer -> policy -> SQLite -> CLI/export`; `docs/limitations.md` with no hook veto, no near-duplicate enforcement, no replay, nullable usage/cost, directional evidence, and the conservative rule that a crashed Codex session lacking `session.stopped` is skipped by automatic retention until manually deleted; `docs/security.md` with threat model, redaction, permissions, seven-day retention, deletion caveat, no telemetry, and Windows ACL best effort; `docs/benchmark-methodology.md` ordered by task success, under-call rate, false-block rate, then call efficiency.
+Write `docs/architecture.md` with data flow `Codex event -> dispatcher -> normalizer -> policy -> SQLite -> CLI/export`; `docs/limitations.md` with no hook veto, no near-duplicate enforcement, no replay, nullable usage/cost, directional evidence, the conservative rule that a crashed Codex session lacking `session.stopped` is skipped by automatic retention until manually deleted, and the one-time v0.2-to-v0.3 duplicate epoch reset (legacy-v1 rows still count for budget/progress but are not exact v2 duplicate candidates); `docs/security.md` with threat model, redaction, permissions, seven-day retention, deletion caveat, no telemetry, and Windows ACL best effort; `docs/benchmark-methodology.md` ordered by task success, under-call rate, false-block rate, then call efficiency.
 
 Link hook and installation claims directly to the official Codex sources `https://learn.chatgpt.com/docs/hooks.md` and `https://learn.chatgpt.com/docs/build-plugins.md`. Do not copy long passages; summarize the current contract and date the compatibility note `2026-07-14`.
 
@@ -2481,7 +2491,7 @@ Extend `.github/workflows/validate.yml` so Linux and Windows Python 3.10/3.12 ru
 
 Do not make CI depend on a Codex installation: the checked-in package/skill tests are mandatory everywhere; the official local validator is mandatory in the release checklist below. Add artifact upload for wheel, sdist, and plugin ZIP.
 
-Write `docs/releases/v0.3.0.md` with `Highlights`, `Compatibility`, `Privacy`, `Measured validation`, `Known limitations`, `Install/update`, and `Checksums`. The checksums section says that exact SHA-256 values ship in the attached `SHA256SUMS.txt`, avoiding a self-referential committed artifact hash. Claims must say local-first observe/warn plugin, not firewall; include the actual ten-case result and existing directional A/B caveat only after verification. The limitations section must contain the exact statements `Policy replay is deferred to v0.4 after schema-v2 logs exist.` and `Current deterministic, instrumentation, and small matched A/B results are directional evidence, not production benchmarks.`
+Write `docs/releases/v0.3.0.md` with `Highlights`, `Compatibility`, `Privacy`, `Measured validation`, `Known limitations`, `Install/update`, and `Checksums`. The checksums section says that exact SHA-256 values ship in the attached `SHA256SUMS.txt`, avoiding a self-referential committed artifact hash. Claims must say local-first observe/warn plugin, not firewall; include the actual ten-case result and existing directional A/B caveat only after verification. Compatibility must state that migrated legacy-v1 rows keep budget/progress accounting but start a new exact-duplicate epoch under fingerprint v2. The limitations section must contain the exact statements `Policy replay is deferred to v0.4 after schema-v2 logs exist.` and `Current deterministic, instrumentation, and small matched A/B results are directional evidence, not production benchmarks.`
 
 - [ ] **Step 4: Run the complete local release gate from a clean worktree**
 

@@ -133,13 +133,15 @@ Do not split `policy.py` further unless implementation makes a responsibility bo
 
 `v0.2.0` already preserves string case and list order while sorting JSON object keys. `v0.3.0` makes that behavior explicit, versioned, and tool-aware.
 
-Every stored decision records:
+Every new v0.3 decision records:
 
 ```text
 fingerprint
 fingerprint_version = 2
 duplicate_scope = turn
 ```
+
+Migrated v0.2 lifecycle rows retain `fingerprint_version = 1`. Their fingerprints were produced by the older identity algorithm and must never be relabeled as v2. They still count toward budget and progress history, but they do not participate in exact v2 duplicate matching; upgrading therefore starts one explicit v2 duplicate epoch without discarding legacy accounting.
 
 The canonical identity always includes:
 
@@ -170,7 +172,7 @@ Initial tool rules:
 Duplicate levels stay separate:
 
 - Same host call ID: return the previously persisted decision.
-- Same exact fingerprint in the active turn: policy duplicate candidate.
+- Same exact fingerprint and fingerprint version in the active turn: policy duplicate candidate. Persisted legacy-v1 rows are not v2 duplicate candidates; pre-1.0 in-memory history entries that omit the field remain compatible and are treated as current-version entries.
 - Near duplicate: no enforcement in this release.
 
 `v0.3.0` accepts an explicit state token for integrations that can prove a meaningful state change. It does not guess whether arbitrary Bash or MCP calls are read-only and does not relax potentially side-effectful duplicates using a time-to-live.
@@ -268,7 +270,7 @@ Migration rules:
 - run inside an exclusive migration transaction;
 - add and backfill new columns without deleting old lifecycle rows;
 - map legacy phases to the nearest canonical event type;
-- mark existing SQLite fingerprints as version 2 because SQLite runtime ledgers first shipped with the v0.2 semantics;
+- mark existing SQLite fingerprints as version 1, retain them for budget/progress accounting, and exclude them from exact v2 duplicate comparison because the old digest cannot be safely reclassified or reconstructed;
 - mark legacy policy decisions with a distinct legacy policy version;
 - never fabricate missing `call.proposed` records for old sessions;
 - reject an unknown future schema version with an actionable error; and
@@ -502,6 +504,7 @@ Existing policy regression, runtime replay, Agents SDK adapter, concurrency, can
 - Same tool/subagent call-ID redelivery returns the previous decision and does not create a second logical decision.
 - SessionStart duplicates inside the documented five-second delivery window collapse, without treating later legitimate resumes as duplicates.
 - Fingerprint version 2 is stored and tool-aware false-positive fixtures pass.
+- Migrated v0.2 fingerprints are marked version 1, continue to count for budget/progress, and never masquerade as exact v2 duplicates.
 - Existing v0.2 ledgers migrate without event loss.
 - Hook internal failures do not stop the Codex call path.
 - Raw prompts, tool inputs, outputs, host IDs, secrets, home paths, emails, and exception messages are absent from the DB and exports in canary tests.
