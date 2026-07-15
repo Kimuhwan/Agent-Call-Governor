@@ -7,8 +7,9 @@ import json
 import math
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import KW_ONLY, dataclass, field
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerprint
@@ -46,6 +47,19 @@ LEGACY_EVENT_TYPES = {
 RUNTIME_MODES = {"observe", "warn", "enforce"}
 FAILURE_POLICIES = {"fail-open", "fail-closed"}
 EVENT_FAILURE_POLICIES = FAILURE_POLICIES | {"legacy-unknown"}
+DECISION_VALUES = {"allow", "would_block", "block", "internal_error"}
+STATUS_VALUES = {
+    "proposed",
+    "decided",
+    "running",
+    "blocked",
+    "completed",
+    "failed",
+    "cancelled",
+    "observed",
+    "started",
+    "stopped",
+}
 POLICY_FACTS_VERSION = 1
 _POLICY_FACT_FIELDS = frozenset({
     "fingerprint",
@@ -160,6 +174,29 @@ def _validate_policy_facts(value: dict[str, Any]) -> dict[str, Any]:
             f"policy_facts.policy_facts_version must be {POLICY_FACTS_VERSION}"
         )
     return value
+
+
+def _policy_facts_copy(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return _validate_policy_facts(_json_object(value, "policy_facts"))
+
+
+def _validate_event_boundary(event: "CallEvent") -> dict[str, Any] | None:
+    """Revalidate canonical and privacy-sensitive fields at an output boundary."""
+    if event.schema_version != 2:
+        raise ValueError("schema_version must be 2 at canonical boundaries")
+    if not _is_sha256_reference(event.fingerprint):
+        raise ValueError("fingerprint must be a SHA-256 reference")
+    if event.input_digest is not None and not _is_sha256_reference(event.input_digest):
+        raise ValueError("input_digest must be null or a SHA-256 reference")
+    if event.decision is not None:
+        _choice(event.decision, DECISION_VALUES, "decision")
+    if event.status is not None:
+        _choice(event.status, STATUS_VALUES, "status")
+    if event.raw_input_stored is not False:
+        raise ValueError("raw_input_stored must be false")
+    return _policy_facts_copy(event.policy_facts)
 
 
 def utc_now() -> str:
@@ -302,13 +339,6 @@ class CallEvent:
     profile: str
     quality_risk: str
     mode: str
-    event_type: str
-    observed_at: str
-    trace_id: str
-    turn_id: str | None
-    span_id: str
-    parent_span_id: str | None
-    source_event: str
     policy_allowed: bool | None = None
     execution_allowed: bool | None = None
     decision_reason: str | None = None
@@ -318,6 +348,15 @@ class CallEvent:
     source: str = "runtime"
     metadata: Mapping[str, Any] = field(default_factory=dict)
     error_type: str | None = None
+    schema_version: int = 1
+    _: KW_ONLY
+    event_type: str | None = None
+    observed_at: str | None = None
+    trace_id: str | None = None
+    turn_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    source_event: str | None = None
     agent_id: str | None = None
     tool_name: str | None = None
     input_digest: str | None = None
@@ -338,7 +377,6 @@ class CallEvent:
     pricing_version: str | None = None
     raw_input_stored: bool = False
     policy_facts: Mapping[str, Any] | None = None
-    schema_version: int = 2
 
     def __post_init__(self) -> None:
         for name in (
@@ -350,15 +388,25 @@ class CallEvent:
             "route",
             "fingerprint",
             "source",
-            "event_type",
-            "observed_at",
-            "trace_id",
-            "span_id",
-            "source_event",
         ):
             object.__setattr__(self, name, _nonempty(getattr(self, name), name))
+        if not _is_sha256_reference(self.fingerprint):
+            raise ValueError("fingerprint must be a SHA-256 reference")
         object.__setattr__(self, "objective", _objective_reference(self.objective))
         object.__setattr__(self, "phase", _choice(self.phase, EVENT_PHASES, "phase"))
+        canonical_defaults = {
+            "event_type": LEGACY_EVENT_TYPES[self.phase],
+            "observed_at": self.occurred_at,
+            "trace_id": self.session_id,
+            "span_id": self.call_id,
+            "parent_span_id": self.parent_call_id,
+            "source_event": self.source,
+        }
+        for name, default in canonical_defaults.items():
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, default)
+        for name in ("event_type", "observed_at", "trace_id", "span_id", "source_event"):
+            object.__setattr__(self, name, _nonempty(getattr(self, name), name))
         object.__setattr__(self, "event_type", _choice(self.event_type, EVENT_TYPES, "event_type"))
         object.__setattr__(self, "budget_kind", _choice(self.budget_kind, BUDGET_KINDS, "budget_kind"))
         object.__setattr__(self, "profile", _choice(self.profile, PROFILE_NAMES, "profile"))
@@ -378,16 +426,20 @@ class CallEvent:
             "agent_id",
             "tool_name",
             "input_digest",
-            "decision",
             "reason_code",
             "policy_version",
-            "status",
             "pricing_version",
             "error_type",
         ):
             value = getattr(self, name)
             if value is not None:
                 object.__setattr__(self, name, _nonempty(value, name))
+        if self.input_digest is not None and not _is_sha256_reference(self.input_digest):
+            raise ValueError("input_digest must be null or a SHA-256 reference")
+        if self.decision is not None:
+            object.__setattr__(self, "decision", _choice(self.decision, DECISION_VALUES, "decision"))
+        if self.status is not None:
+            object.__setattr__(self, "status", _choice(self.status, STATUS_VALUES, "status"))
         for name in ("budget_before", "budget_after", "prompt_tokens", "completion_tokens", "total_tokens"):
             value = getattr(self, name)
             if value is not None and (
@@ -423,9 +475,10 @@ class CallEvent:
         if (
             not isinstance(self.schema_version, int)
             or isinstance(self.schema_version, bool)
-            or self.schema_version < 1
+            or self.schema_version not in {1, 2}
         ):
-            raise ValueError("schema_version must be a positive integer")
+            raise ValueError("schema_version must be the supported legacy version 1 or canonical version 2")
+        object.__setattr__(self, "schema_version", 2)
         object.__setattr__(
             self,
             "metadata",
@@ -434,29 +487,23 @@ class CallEvent:
                 source=self.source,
             ),
         )
-        if self.policy_facts is not None:
-            object.__setattr__(
-                self,
-                "policy_facts",
-                _validate_policy_facts(_json_object(self.policy_facts, "policy_facts")),
-            )
+        policy_facts = _policy_facts_copy(self.policy_facts)
+        object.__setattr__(
+            self,
+            "policy_facts",
+            None if policy_facts is None else MappingProxyType(policy_facts),
+        )
 
     @classmethod
     def create(cls, **values: Any) -> "CallEvent":
         resolved = dict(values)
         resolved["event_id"] = resolved.get("event_id", str(uuid.uuid4()))
         resolved["occurred_at"] = resolved.get("occurred_at", utc_now())
-        phase = resolved.get("phase")
-        resolved.setdefault("event_type", LEGACY_EVENT_TYPES.get(phase, f"call.{phase}"))
-        resolved.setdefault("observed_at", resolved["occurred_at"])
-        resolved.setdefault("trace_id", resolved.get("session_id"))
-        resolved.setdefault("turn_id", None)
-        resolved.setdefault("span_id", resolved.get("call_id"))
-        resolved.setdefault("parent_span_id", resolved.get("parent_call_id"))
-        resolved.setdefault("source_event", resolved.get("source", "runtime"))
+        resolved.setdefault("schema_version", 2)
         return cls(**resolved)
 
     def to_dict(self) -> dict[str, Any]:
+        policy_facts = _validate_event_boundary(self)
         return {
             "schema_version": self.schema_version,
             "event_id": self.event_id,
@@ -506,9 +553,7 @@ class CallEvent:
             "estimated_cost_usd": self.estimated_cost_usd,
             "pricing_version": self.pricing_version,
             "raw_input_stored": self.raw_input_stored,
-            "policy_facts_json": (
-                None if self.policy_facts is None else dict(self.policy_facts)
-            ),
+            "policy_facts_json": policy_facts,
         }
 
     @classmethod

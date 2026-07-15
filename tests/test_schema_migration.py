@@ -34,6 +34,12 @@ CREATE TABLE call_events (
   metadata_json TEXT NOT NULL, error_type TEXT
 )
 """
+LEGACY_INDEXES = """
+CREATE INDEX idx_call_events_session_call
+  ON call_events(session_id, call_id, seq);
+CREATE INDEX idx_call_events_session_fingerprint
+  ON call_events(session_id, fingerprint, seq);
+"""
 LEGACY_CANARY = "private legacy value"
 LEGACY_COLUMN_NAMES = {
     "seq", "event_id", "schema_version", "session_id", "call_id", "parent_call_id",
@@ -64,6 +70,7 @@ def create_v02_database(
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("PRAGMA wal_autocheckpoint = 0")
     connection.execute(LEGACY_COLUMNS)
+    connection.executescript(LEGACY_INDEXES)
     connection.execute(
         "INSERT INTO call_events VALUES "
         "(1,'event-1',1,'session-ref','call-ref',NULL,'completed','2026-07-13T00:00:00Z',"
@@ -78,6 +85,20 @@ def create_v02_database(
         return connection
     connection.close()
     return None
+
+
+def create_legacy_schema(
+    path: Path,
+    *,
+    table_sql: str = LEGACY_COLUMNS,
+    indexes_sql: str = LEGACY_INDEXES,
+) -> sqlite3.Connection:
+    connection = sqlite3.connect(path)
+    connection.execute(table_sql)
+    if indexes_sql:
+        connection.executescript(indexes_sql)
+    connection.commit()
+    return connection
 
 
 class SchemaMigrationTests(unittest.TestCase):
@@ -148,26 +169,247 @@ class SchemaMigrationTests(unittest.TestCase):
         connection.execute("CREATE TABLE call_events (seq INTEGER PRIMARY KEY, unknown TEXT)")
         connection.commit()
         before = tuple(connection.execute("PRAGMA table_info(call_events)"))
+        journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
         connection.close()
 
         with self.assertRaisesRegex(UnsupportedLegacySchemaError, "unrecognized legacy schema"):
             CallLedger(self.path)
 
-        connection = sqlite3.connect(self.path)
-        self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
-        self.assertEqual(tuple(connection.execute("PRAGMA table_info(call_events)")), before)
-        connection.close()
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(tuple(connection.execute("PRAGMA table_info(call_events)")), before)
+            self.assertEqual(
+                connection.execute("PRAGMA journal_mode").fetchone()[0],
+                journal_mode_before,
+            )
+
+    def test_nonempty_user_version_zero_database_is_not_claimed_or_mutated(self) -> None:
+        cases = {
+            "table": "CREATE TABLE sentinel (value TEXT)",
+            "view": "CREATE VIEW sentinel_view AS SELECT 1 AS value",
+        }
+        for name, statement in cases.items():
+            with self.subTest(object_type=name):
+                path = self.path.with_name(f"unrelated-{name}.sqlite3")
+                connection = sqlite3.connect(path)
+                connection.execute(statement)
+                connection.commit()
+                before = tuple(
+                    connection.execute(
+                        "SELECT type, name, sql FROM sqlite_schema "
+                        "WHERE substr(lower(name), 1, 7) <> 'sqlite_' ORDER BY type, name"
+                    )
+                )
+                journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                connection.close()
+
+                with self.assertRaisesRegex(
+                    UnsupportedLegacySchemaError,
+                    "nonempty user-version 0 database",
+                ):
+                    CallLedger(path)
+
+                connection = sqlite3.connect(path)
+                after = tuple(
+                    connection.execute(
+                        "SELECT type, name, sql FROM sqlite_schema "
+                        "WHERE substr(lower(name), 1, 7) <> 'sqlite_' ORDER BY type, name"
+                    )
+                )
+                self.assertEqual(after, before)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                self.assertEqual(
+                    connection.execute("PRAGMA journal_mode").fetchone()[0],
+                    journal_mode_before,
+                )
+                connection.close()
+
+    def test_legacy_lookalikes_without_autoincrement_or_unique_are_rejected(self) -> None:
+        cases = {
+            "autoincrement": LEGACY_COLUMNS.replace(" AUTOINCREMENT", ""),
+            "unique": LEGACY_COLUMNS.replace(" UNIQUE", ""),
+        }
+        for name, table_sql in cases.items():
+            with self.subTest(missing=name):
+                path = self.path.with_name(f"legacy-no-{name}.sqlite3")
+                create_legacy_schema(path, table_sql=table_sql).close()
+
+                with self.assertRaisesRegex(
+                    UnsupportedLegacySchemaError,
+                    "released v0.2 schema",
+                ):
+                    CallLedger(path)
+
+    def test_legacy_lookalikes_with_missing_or_wrong_indexes_are_rejected(self) -> None:
+        cases = {
+            "missing": "DROP INDEX idx_call_events_session_fingerprint",
+            "wrong": (
+                "DROP INDEX idx_call_events_session_call;"
+                "CREATE INDEX idx_call_events_session_call "
+                "ON call_events(call_id, session_id, seq);"
+            ),
+        }
+        for name, mutation in cases.items():
+            with self.subTest(index_case=name):
+                path = self.path.with_name(f"legacy-index-{name}.sqlite3")
+                connection = create_legacy_schema(path)
+                connection.executescript(mutation)
+                connection.commit()
+                connection.close()
+
+                with self.assertRaisesRegex(
+                    UnsupportedLegacySchemaError,
+                    "released v0.2 schema",
+                ):
+                    CallLedger(path)
+
+    def test_legacy_generated_column_and_extra_trigger_are_rejected(self) -> None:
+        generated_table = LEGACY_COLUMNS.replace(
+            "  metadata_json TEXT NOT NULL, error_type TEXT\n)",
+            "  metadata_json TEXT NOT NULL, error_type TEXT,\n"
+            "  generated_probe INTEGER GENERATED ALWAYS AS (length(event_id)) VIRTUAL\n)",
+        )
+        cases = {
+            "generated": (generated_table, None),
+            "trigger": (
+                LEGACY_COLUMNS,
+                "CREATE TRIGGER unexpected_trigger AFTER INSERT ON call_events "
+                "BEGIN SELECT 1; END",
+            ),
+        }
+        for name, (table_sql, mutation) in cases.items():
+            with self.subTest(schema_case=name):
+                path = self.path.with_name(f"legacy-{name}.sqlite3")
+                connection = create_legacy_schema(path, table_sql=table_sql)
+                if mutation is not None:
+                    connection.execute(mutation)
+                    connection.commit()
+                connection.close()
+
+                with self.assertRaisesRegex(
+                    UnsupportedLegacySchemaError,
+                    "released v0.2 schema",
+                ):
+                    CallLedger(path)
+
+    def test_legacy_extra_table_constraints_are_rejected(self) -> None:
+        cases = {
+            "check": LEGACY_COLUMNS.replace(
+                "error_type TEXT",
+                "error_type TEXT CHECK(error_type IS NULL)",
+            ),
+            "collate": LEGACY_COLUMNS.replace(
+                "error_type TEXT",
+                'error_type TEXT COLLATE"NOCASE"',
+            ),
+            "conflict-comment": LEGACY_COLUMNS.replace(
+                "event_id TEXT NOT NULL UNIQUE",
+                "event_id TEXT NOT NULL ON/**/CONFLICT FAIL UNIQUE",
+            ),
+            "strict": LEGACY_COLUMNS.rstrip() + "STRICT\n",
+        }
+        for name, table_sql in cases.items():
+            with self.subTest(constraint=name):
+                path = self.path.with_name(f"legacy-constraint-{name}.sqlite3")
+                create_legacy_schema(path, table_sql=table_sql).close()
+
+                with self.assertRaisesRegex(
+                    UnsupportedLegacySchemaError,
+                    "released v0.2 schema",
+                ):
+                    CallLedger(path)
 
     def test_declared_v2_with_incompatible_shape_is_rejected(self) -> None:
         connection = sqlite3.connect(self.path)
         connection.execute("CREATE TABLE call_events (seq INTEGER PRIMARY KEY)")
         connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         connection.commit()
+        journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
         connection.close()
 
         with self.assertRaisesRegex(
             UnsupportedSchemaVersionError,
-            "incompatible call_events columns",
+            "incompatible call_events",
+        ):
+            CallLedger(self.path)
+
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(
+                connection.execute("PRAGMA journal_mode").fetchone()[0],
+                journal_mode_before,
+            )
+
+    def test_declared_v2_semantic_lookalikes_are_rejected(self) -> None:
+        cases = {
+            "missing-index": "DROP INDEX idx_call_events_session_fingerprint",
+            "wrong-index": (
+                "DROP INDEX idx_call_events_session_call;"
+                "CREATE INDEX idx_call_events_session_call "
+                "ON call_events(call_id, session_id, seq);"
+            ),
+            "extra-trigger": (
+                "CREATE TRIGGER unexpected_trigger AFTER INSERT ON call_events "
+                "BEGIN SELECT 1; END"
+            ),
+            "extra-table": "CREATE TABLE unexpected_table (value TEXT)",
+            "generated-column": (
+                "ALTER TABLE call_events ADD COLUMN generated_probe INTEGER "
+                "GENERATED ALWAYS AS (length(event_id)) VIRTUAL"
+            ),
+        }
+        for name, mutation in cases.items():
+            with self.subTest(schema_case=name):
+                path = self.path.with_name(f"v2-{name}.sqlite3")
+                CallLedger(path)
+                connection = sqlite3.connect(path)
+                connection.executescript(mutation)
+                connection.commit()
+                connection.close()
+
+                with self.assertRaisesRegex(
+                    UnsupportedSchemaVersionError,
+                    "schema version 2 has incompatible",
+                ):
+                    CallLedger(path)
+
+    def test_declared_v2_extra_table_constraint_is_rejected(self) -> None:
+        CallLedger(self.path)
+        with closing(sqlite3.connect(self.path)) as connection:
+            table_sql = connection.execute(
+                "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'call_events'"
+            ).fetchone()[0]
+            tampered_sql = table_sql.replace(
+                "error_type TEXT,",
+                "error_type TEXT CHECK(error_type IS NULL),",
+            )
+            self.assertNotEqual(tampered_sql, table_sql)
+            connection.execute("PRAGMA writable_schema = ON")
+            connection.execute(
+                "UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = 'call_events'",
+                (tampered_sql,),
+            )
+            schema_cookie = connection.execute("PRAGMA schema_version").fetchone()[0]
+            connection.execute(f"PRAGMA schema_version = {schema_cookie + 1}")
+            connection.execute("PRAGMA writable_schema = OFF")
+            connection.commit()
+
+        with self.assertRaisesRegex(
+            UnsupportedSchemaVersionError,
+            "schema version 2 has incompatible",
+        ):
+            CallLedger(self.path)
+
+    def test_declared_v2_rejects_noncanonical_event_schema_versions(self) -> None:
+        create_v02_database(self.path)
+        CallLedger(self.path)
+        connection = sqlite3.connect(self.path)
+        connection.execute("UPDATE call_events SET schema_version = 1")
+        connection.commit()
+        connection.close()
+
+        with self.assertRaisesRegex(
+            UnsupportedSchemaVersionError,
+            "noncanonical event schema_version",
         ):
             CallLedger(self.path)
 
@@ -176,22 +418,28 @@ class SchemaMigrationTests(unittest.TestCase):
         connection = sqlite3.connect(self.path)
         connection.execute("UPDATE call_events SET metadata_json = '{not-json'")
         connection.commit()
+        journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
         connection.close()
+        database_bytes_before = self.path.read_bytes()
 
         with self.assertRaisesRegex(ValueError, "legacy metadata_json"):
             CallLedger(self.path)
 
-        connection = sqlite3.connect(self.path)
-        self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
-        self.assertEqual(connection.execute("PRAGMA application_id").fetchone()[0], 0)
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(call_events)")}
-        self.assertNotIn("event_type", columns)
-        connection.execute(
-            "UPDATE call_events SET metadata_json = ?",
-            (json.dumps({"custom_note": LEGACY_CANARY}),),
-        )
-        connection.commit()
-        connection.close()
+        self.assertEqual(self.path.read_bytes(), database_bytes_before)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+            self.assertEqual(connection.execute("PRAGMA application_id").fetchone()[0], 0)
+            self.assertEqual(
+                connection.execute("PRAGMA journal_mode").fetchone()[0],
+                journal_mode_before,
+            )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(call_events)")}
+            self.assertNotIn("event_type", columns)
+            connection.execute(
+                "UPDATE call_events SET metadata_json = ?",
+                (json.dumps({"custom_note": LEGACY_CANARY}),),
+            )
+            connection.commit()
 
         reopened = CallLedger(self.path)
         self.assertEqual(reopened.events()[0].fingerprint_version, 1)
@@ -288,21 +536,66 @@ class SchemaMigrationTests(unittest.TestCase):
             policy_facts=facts,
             raw_input_stored=False,
         )
-        event_schema = json.loads(
-            (ROOT / "schemas" / "event-v2.schema.json").read_text(encoding="utf-8")
-        )
         facts_schema = json.loads(
             (ROOT / "schemas" / "policy-facts-v1.schema.json").read_text(encoding="utf-8")
         )
-        Draft202012Validator.check_schema(event_schema)
         Draft202012Validator.check_schema(facts_schema)
-        Draft202012Validator(event_schema).validate(event.to_dict())
         Draft202012Validator(facts_schema).validate(event.to_dict()["policy_facts_json"])
 
-        unsafe = event.to_dict()
-        unsafe["raw_input_stored"] = True
-        with self.assertRaises(ValidationError):
-            Draft202012Validator(event_schema).validate(unsafe)
+        event_schema_paths = (ROOT / "schemas" / "event-v2.schema.json",)
+        for path in event_schema_paths:
+            self.assertTrue(path.is_file(), f"missing canonical event schema: {path.name}")
+
+        facts_contract = {
+            key: value
+            for key, value in facts_schema.items()
+            if key not in {"$schema", "$id", "title"}
+        }
+        for path in event_schema_paths:
+            with self.subTest(event_schema=path.name):
+                event_schema = json.loads(path.read_text(encoding="utf-8"))
+                Draft202012Validator.check_schema(event_schema)
+                self.assertEqual(
+                    event_schema["$defs"]["policy_facts_v1"],
+                    facts_contract,
+                )
+                self.assertEqual(
+                    event_schema["properties"]["policy_facts_json"],
+                    {
+                        "oneOf": [
+                            {"type": "null"},
+                            {"$ref": "#/$defs/policy_facts_v1"},
+                        ]
+                    },
+                )
+                encoded_schema = json.dumps(event_schema, sort_keys=True)
+                self.assertNotIn('"$ref": "http', encoded_schema)
+                self.assertNotIn('"$ref": "policy-facts', encoded_schema)
+
+                validator = Draft202012Validator(event_schema)
+                validator.validate(event.to_dict())
+
+                null_facts = event.to_dict()
+                null_facts["policy_facts_json"] = None
+                validator.validate(null_facts)
+
+                raw_facts = event.to_dict()
+                raw_facts["policy_facts_json"] = {"raw_prompt": "SECRET"}
+                with self.assertRaises(ValidationError):
+                    validator.validate(raw_facts)
+
+                legacy_event_facts = event.to_dict()
+                legacy_event_facts["policy_facts_json"] = dict(
+                    facts,
+                    fingerprint_version=1,
+                )
+                with self.assertRaises(ValidationError):
+                    validator.validate(legacy_event_facts)
+
+                unsafe = event.to_dict()
+                unsafe["raw_input_stored"] = True
+                with self.assertRaises(ValidationError):
+                    validator.validate(unsafe)
 
         legacy_facts = dict(facts, fingerprint_version=1)
         with self.assertRaises(ValidationError):

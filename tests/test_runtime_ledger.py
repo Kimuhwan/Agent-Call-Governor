@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import json
 import sys
 import tempfile
@@ -12,6 +13,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 from agent_call_governor_runtime.ledger import CallLedger
 from agent_call_governor_runtime.models import CallEvent, CallProposal
+
+
+def digest_reference(value):
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def policy_facts():
@@ -47,7 +52,7 @@ class RuntimeLedgerTests(unittest.TestCase):
         session_id="session-1",
         call_id="call-1",
         objective="Inspect authentication failure",
-        fingerprint="fp-1",
+        fingerprint=digest_reference("fp-1"),
         progress=None,
         budget_kind="agent",
         metadata=None,
@@ -152,14 +157,174 @@ class RuntimeLedgerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "policy_facts.risk"):
             self.event("proposed", policy_facts=malformed)
 
+    def test_policy_facts_are_immutable_and_export_is_detached(self):
+        source_facts = policy_facts()
+        event = self.event("proposed", policy_facts=source_facts)
+
+        source_facts["risk"] = "high"
+        with self.assertRaises(TypeError):
+            event.policy_facts["risk"] = "high"
+
+        exported = event.to_dict()
+        exported["policy_facts_json"]["risk"] = "high"
+
+        self.assertEqual(event.policy_facts["risk"], "medium")
+        self.assertEqual(event.to_dict()["policy_facts_json"]["risk"], "medium")
+
+    def test_tampered_policy_facts_cannot_be_exported_or_persisted(self):
+        for boundary in ("export", "persistence"):
+            with self.subTest(boundary=boundary):
+                event = self.event(
+                    "proposed",
+                    call_id=f"call-{boundary}",
+                    policy_facts=policy_facts(),
+                )
+                object.__setattr__(
+                    event,
+                    "policy_facts",
+                    {"raw_prompt": "POLICY-FACTS-PLAINTEXT-CANARY"},
+                )
+
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "policy_facts must contain exactly",
+                ):
+                    if boundary == "export":
+                        event.to_dict()
+                    else:
+                        self.ledger.append(event)
+
+        self.assertEqual(self.ledger.events(), [])
+        self.assertNotIn(b"POLICY-FACTS-PLAINTEXT-CANARY", self.db_path.read_bytes())
+
+    def test_invalid_canonical_fields_are_rejected_at_construction(self):
+        invalid_values = {
+            "fingerprint": "not-a-digest",
+            "input_digest": "sha256:short",
+            "decision": "permit",
+            "status": "done",
+            "schema_version": 3,
+        }
+        for field, value in invalid_values.items():
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, field):
+                    self.event("proposed", **{field: value})
+
+    def test_tampered_canonical_fields_cannot_be_exported_or_persisted(self):
+        invalid_values = {
+            "fingerprint": "not-a-digest",
+            "input_digest": "sha256:short",
+            "decision": "permit",
+            "status": "done",
+            "schema_version": 1,
+        }
+        for field, value in invalid_values.items():
+            for boundary in ("export", "persistence"):
+                with self.subTest(field=field, boundary=boundary):
+                    event = self.event(
+                        "proposed",
+                        call_id=f"{field}-{boundary}",
+                    )
+                    object.__setattr__(event, field, value)
+                    with self.assertRaisesRegex(ValueError, field):
+                        if boundary == "export":
+                            event.to_dict()
+                        else:
+                            self.ledger.append(event)
+
+        self.assertEqual(self.ledger.events(), [])
+
+    def test_legacy_schema_version_is_upgraded_before_export_and_persistence(self):
+        event = self.event("started", schema_version=1)
+
+        self.assertEqual(event.schema_version, 2)
+        self.assertEqual(event.to_dict()["schema_version"], 2)
+        self.ledger.append(event)
+        self.assertEqual(self.ledger.events()[0].schema_version, 2)
+
+    def test_public_constructor_preserves_v02_positional_binding(self):
+        legacy_parameter_names = [
+            "event_id",
+            "session_id",
+            "call_id",
+            "phase",
+            "occurred_at",
+            "objective",
+            "route",
+            "fingerprint",
+            "budget_kind",
+            "profile",
+            "quality_risk",
+            "mode",
+            "policy_allowed",
+            "execution_allowed",
+            "decision_reason",
+            "progress",
+            "parent_call_id",
+            "duration_ms",
+            "source",
+            "metadata",
+            "error_type",
+            "schema_version",
+        ]
+        parameters = list(inspect.signature(CallEvent).parameters.values())
+        self.assertEqual(
+            [parameter.name for parameter in parameters[:22]],
+            legacy_parameter_names,
+        )
+
+        event = CallEvent(
+            "event-positional",
+            "session-positional",
+            "call-positional",
+            "completed",
+            "2026-07-14T00:00:00Z",
+            "Legacy positional objective",
+            "Bash",
+            digest_reference("legacy-positional"),
+            "direct-tool",
+            "strict",
+            "high",
+            "warn",
+            True,
+            False,
+            "legacy decision",
+            "material_progress",
+            "parent-positional",
+            1.25,
+            "legacy-runtime",
+            {"exit_code": 0},
+            "LegacyError",
+            1,
+        )
+
+        self.assertEqual(event.schema_version, 2)
+        self.assertEqual(event.event_type, "call.completed")
+        self.assertEqual(event.observed_at, event.occurred_at)
+        self.assertEqual(event.trace_id, event.session_id)
+        self.assertEqual(event.span_id, event.call_id)
+        self.assertEqual(event.parent_span_id, event.parent_call_id)
+        self.assertEqual(event.source_event, event.source)
+        self.assertIs(event.policy_allowed, True)
+        self.assertIs(event.execution_allowed, False)
+        self.assertEqual(event.decision_reason, "legacy decision")
+        self.assertEqual(event.error_type, "LegacyError")
+
+        self.ledger.append(event)
+        self.assertEqual(self.ledger.events()[0], event)
+
     def test_started_call_counts_once_and_blocked_call_does_not(self):
-        self.ledger.append(self.event("blocked", call_id="blocked", fingerprint="fp-blocked"))
-        self.ledger.append(self.event("started", call_id="real", fingerprint="fp-real"))
+        self.ledger.append(
+            self.event("blocked", call_id="blocked", fingerprint=digest_reference("fp-blocked"))
+        )
+        self.ledger.append(
+            self.event("started", call_id="real", fingerprint=digest_reference("fp-real"))
+        )
         self.ledger.append(
             self.event(
                 "completed",
                 call_id="real",
-                fingerprint="fp-real",
+                fingerprint=digest_reference("fp-real"),
                 progress="sufficient",
             )
         )
@@ -168,7 +333,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             self.ledger.history("session-1"),
             [
                 {
-                    "fingerprint": "fp-real",
+                    "fingerprint": digest_reference("fp-real"),
                     "progress": "sufficient",
                     "budget_kind": "agent",
                 }
@@ -189,7 +354,7 @@ class RuntimeLedgerTests(unittest.TestCase):
 
         self.assertEqual(
             self.ledger.history("session-1"),
-            [{"fingerprint": "fp-1", "budget_kind": "agent"}],
+            [{"fingerprint": digest_reference("fp-1"), "budget_kind": "agent"}],
         )
 
     def test_explicit_fingerprint_version_is_exposed_in_history(self):
@@ -197,7 +362,13 @@ class RuntimeLedgerTests(unittest.TestCase):
 
         self.assertEqual(
             self.ledger.history("session-1"),
-            [{"fingerprint": "fp-1", "fingerprint_version": 2, "budget_kind": "agent"}],
+            [
+                {
+                    "fingerprint": digest_reference("fp-1"),
+                    "fingerprint_version": 2,
+                    "budget_kind": "agent",
+                }
+            ],
         )
 
     def test_cancelled_before_execution_releases_started_reservation(self):
@@ -223,7 +394,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                 "started",
                 session_id="session-2",
                 call_id="call-2",
-                fingerprint="fp-2",
+                fingerprint=digest_reference("fp-2"),
                 budget_kind="direct-tool",
             )
         )
@@ -240,7 +411,10 @@ class RuntimeLedgerTests(unittest.TestCase):
         reopened = CallLedger(self.db_path)
 
         self.assertEqual(len(reopened.events("session-1")), 1)
-        self.assertEqual(reopened.history("session-1")[0]["fingerprint"], "fp-1")
+        self.assertEqual(
+            reopened.history("session-1")[0]["fingerprint"],
+            digest_reference("fp-1"),
+        )
 
     def test_jsonl_mirror_is_one_valid_object_per_line(self):
         self.ledger.append(self.event("started", metadata={"safe": "value"}))
@@ -298,7 +472,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     self.event(
                         "started",
                         call_id=f"call-{index}",
-                        fingerprint=f"fp-{index}",
+                        fingerprint=digest_reference(f"fp-{index}"),
                     )
                 )
             except Exception as exc:  # pragma: no cover - asserted below

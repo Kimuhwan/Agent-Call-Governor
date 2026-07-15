@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import warnings
@@ -11,7 +12,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .models import CallEvent
+from .models import CallEvent, _validate_event_boundary
 from .redaction import sanitize_metadata
 
 
@@ -84,7 +85,76 @@ _V2_ADDED_COLUMNS = (
 _SCHEMA_V2_COLUMNS = _LEGACY_V02_COLUMNS + tuple(
     (name, column_type, 0, None, 0) for name, column_type in _V2_ADDED_COLUMNS
 )
+_EXPECTED_USER_OBJECTS = frozenset({
+    ("table", "call_events", "call_events"),
+    ("index", "idx_call_events_session_call", "call_events"),
+    ("index", "idx_call_events_session_fingerprint", "call_events"),
+})
+_EXPECTED_INDEX_XINFO = {
+    "idx_call_events_session_call": (
+        (0, 3, "session_id", 0, "BINARY", 1),
+        (1, 4, "call_id", 0, "BINARY", 1),
+        (2, 0, "seq", 0, "BINARY", 1),
+        (3, -1, None, 0, "BINARY", 0),
+    ),
+    "idx_call_events_session_fingerprint": (
+        (0, 3, "session_id", 0, "BINARY", 1),
+        (1, 10, "fingerprint", 0, "BINARY", 1),
+        (2, 0, "seq", 0, "BINARY", 1),
+        (3, -1, None, 0, "BINARY", 0),
+    ),
+}
+_SQL_TOKEN_PATTERN = re.compile(
+    r"""
+    (?P<whitespace>\s+)
+    |(?P<line_comment>--[^\r\n]*(?:\r?\n|$))
+    |(?P<block_comment>/\*.*?\*/)
+    |(?P<single_quote>'(?:''|[^'])*')
+    |(?P<double_quote>"(?:""|[^"])*")
+    |(?P<backtick>`(?:``|[^`])*`)
+    |(?P<bracket>\[(?:\]\]|[^\]])*\])
+    |(?P<word>[A-Za-z_][A-Za-z0-9_]*)
+    |(?P<number>[0-9]+(?:\.[0-9]+)?)
+    |(?P<punctuation>[(),])
+    |(?P<other>.)
+    """,
+    re.DOTALL | re.VERBOSE,
+)
 T = TypeVar("T")
+
+
+def _sql_tokens(value: str) -> tuple[str, ...]:
+    tokens: list[str] = []
+    for match in _SQL_TOKEN_PATTERN.finditer(value):
+        if match.lastgroup in {"whitespace", "line_comment", "block_comment"}:
+            continue
+        token = match.group(0)
+        tokens.append(token.upper() if match.lastgroup == "word" else token)
+    if tokens[:5] == ["CREATE", "TABLE", "IF", "NOT", "EXISTS"]:
+        tokens = tokens[:2] + tokens[5:]
+    return tuple(tokens)
+
+
+def _expected_create_table_tokens(
+    columns: tuple[tuple[Any, ...], ...],
+) -> tuple[str, ...]:
+    tokens = ["CREATE", "TABLE", "CALL_EVENTS", "("]
+    for index, (name, column_type, notnull, default, primary_key) in enumerate(columns):
+        if index:
+            tokens.append(",")
+        tokens.extend((str(name).upper(), str(column_type).upper()))
+        if primary_key:
+            tokens.extend(("PRIMARY", "KEY"))
+            if name == "seq":
+                tokens.append("AUTOINCREMENT")
+        elif notnull:
+            tokens.extend(("NOT", "NULL"))
+        if name == "event_id":
+            tokens.append("UNIQUE")
+        if default is not None:
+            tokens.extend(("DEFAULT", str(default).upper()))
+    tokens.append(")")
+    return tuple(tokens)
 
 
 class FutureSchemaError(RuntimeError):
@@ -128,33 +198,27 @@ class CallLedger:
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
+            # Admission is read-only so rejected databases retain their original
+            # journal mode and catalog. Recheck under the exclusive transaction
+            # after WAL is enabled to guard the mutation boundary.
+            self._classify_schema(connection)
             connection.execute("PRAGMA journal_mode = WAL")
             connection.execute("PRAGMA synchronous = NORMAL")
             cleanup_pending = False
             try:
                 connection.execute("BEGIN EXCLUSIVE")
-                user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-                if user_version > SCHEMA_VERSION:
-                    raise FutureSchemaError(
-                        f"database schema {user_version} requires a newer Agent Call Governor; "
-                        f"supported={SCHEMA_VERSION}"
-                    )
-                if user_version not in {0, SCHEMA_VERSION}:
-                    raise UnsupportedSchemaVersionError(
-                        f"unsupported schema version {user_version}; supported migration is "
-                        "released v0.2 user_version 0 to schema 2"
-                    )
-                if user_version == 0 and not self._table_exists(connection, "call_events"):
+                schema_state = self._classify_schema(connection)
+                if schema_state == "fresh":
                     self._create_schema_v2(connection)
-                elif user_version == 0:
-                    self._verify_legacy_v02_columns(connection)
+                    self._verify_schema_v2(connection)
+                elif schema_state == "legacy-v0.2":
                     connection.execute(
                         f"PRAGMA application_id = {_MIGRATION_CLEANUP_PENDING}"
                     )
                     self._migrate_v02_to_v2(connection)
+                    self._verify_schema_v2(connection)
                     cleanup_pending = True
                 else:
-                    self._verify_schema_v2(connection)
                     cleanup_pending = (
                         int(connection.execute("PRAGMA application_id").fetchone()[0])
                         == _MIGRATION_CLEANUP_PENDING
@@ -179,6 +243,33 @@ class CallLedger:
                     connection.rollback()
                     raise
 
+    def _classify_schema(self, connection: sqlite3.Connection) -> str:
+        user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        if user_version > SCHEMA_VERSION:
+            raise FutureSchemaError(
+                f"database schema {user_version} requires a newer Agent Call Governor; "
+                f"supported={SCHEMA_VERSION}"
+            )
+        if user_version not in {0, SCHEMA_VERSION}:
+            raise UnsupportedSchemaVersionError(
+                f"unsupported schema version {user_version}; supported migration is "
+                "released v0.2 user_version 0 to schema 2"
+            )
+        if user_version == SCHEMA_VERSION:
+            self._verify_schema_v2(connection)
+            return "schema-v2"
+
+        user_objects = self._user_object_signature(connection)
+        if not user_objects:
+            return "fresh"
+        if not self._table_exists(connection, "call_events"):
+            raise UnsupportedLegacySchemaError(
+                "nonempty user-version 0 database is not a fresh Agent Call Governor ledger"
+            )
+        self._verify_legacy_v02_columns(connection)
+        self._prepare_legacy_rows(connection)
+        return "legacy-v0.2"
+
     @staticmethod
     def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
         return connection.execute(
@@ -187,22 +278,114 @@ class CallLedger:
         ).fetchone() is not None
 
     @staticmethod
-    def _column_signature(connection: sqlite3.Connection) -> tuple[tuple[Any, ...], ...]:
+    def _user_object_signature(
+        connection: sqlite3.Connection,
+    ) -> frozenset[tuple[str, str, str]]:
+        return frozenset(
+            (str(row["type"]), str(row["name"]), str(row["tbl_name"]))
+            for row in connection.execute(
+                "SELECT type, name, tbl_name FROM sqlite_schema "
+                "WHERE substr(lower(name), 1, 7) <> 'sqlite_'"
+            )
+        )
+
+    @staticmethod
+    def _table_xinfo_signature(
+        connection: sqlite3.Connection,
+    ) -> tuple[tuple[Any, ...], ...]:
         return tuple(
             (
+                int(row["cid"]),
                 str(row["name"]),
                 str(row["type"]).upper(),
                 int(row["notnull"]),
                 row["dflt_value"],
                 int(row["pk"]),
+                int(row["hidden"]),
             )
-            for row in connection.execute("PRAGMA table_info(call_events)")
+            for row in connection.execute("PRAGMA table_xinfo(call_events)")
         )
 
+    @staticmethod
+    def _expected_table_xinfo(
+        columns: tuple[tuple[Any, ...], ...],
+    ) -> tuple[tuple[Any, ...], ...]:
+        return tuple(
+            (cid, name, column_type, notnull, default, primary_key, 0)
+            for cid, (name, column_type, notnull, default, primary_key) in enumerate(columns)
+        )
+
+    @staticmethod
+    def _index_xinfo_signature(
+        connection: sqlite3.Connection,
+        index_name: str,
+    ) -> tuple[tuple[Any, ...], ...]:
+        escaped_name = index_name.replace('"', '""')
+        return tuple(
+            (
+                int(row["seqno"]),
+                int(row["cid"]),
+                row["name"],
+                int(row["desc"]),
+                str(row["coll"]),
+                int(row["key"]),
+            )
+            for row in connection.execute(f'PRAGMA index_xinfo("{escaped_name}")')
+        )
+
+    def _schema_mismatch(
+        self,
+        connection: sqlite3.Connection,
+        expected_columns: tuple[tuple[Any, ...], ...],
+    ) -> str | None:
+        if self._user_object_signature(connection) != _EXPECTED_USER_OBJECTS:
+            return "unexpected or missing schema objects"
+        if self._table_xinfo_signature(connection) != self._expected_table_xinfo(expected_columns):
+            return "incompatible call_events columns or hidden definitions"
+
+        table_row = connection.execute(
+            "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'call_events'"
+        ).fetchone()
+        table_sql = "" if table_row is None or table_row["sql"] is None else str(table_row["sql"])
+        if _sql_tokens(table_sql) != _expected_create_table_tokens(expected_columns):
+            return "call_events CREATE TABLE semantics are incompatible"
+        if tuple(connection.execute("PRAGMA foreign_key_list(call_events)")):
+            return "call_events has unexpected foreign keys"
+
+        indexes = {
+            str(row["name"]): (
+                int(row["unique"]),
+                str(row["origin"]),
+                int(row["partial"]),
+            )
+            for row in connection.execute("PRAGMA index_list(call_events)")
+        }
+        named_index_names = set(_EXPECTED_INDEX_XINFO)
+        auto_indexes = {
+            name for name, signature in indexes.items() if signature == (1, "u", 0)
+        }
+        if set(indexes) != named_index_names | auto_indexes or len(auto_indexes) != 1:
+            return "event_id UNIQUE or required index set is incompatible"
+        for name in named_index_names:
+            if indexes.get(name) != (0, "c", 0):
+                return f"required index {name} has incompatible flags"
+            if self._index_xinfo_signature(connection, name) != _EXPECTED_INDEX_XINFO[name]:
+                return f"required index {name} has incompatible columns"
+        auto_index_name = next(iter(auto_indexes))
+        expected_auto_xinfo = (
+            (0, 1, "event_id", 0, "BINARY", 1),
+            (1, -1, None, 0, "BINARY", 0),
+        )
+        if self._index_xinfo_signature(connection, auto_index_name) != expected_auto_xinfo:
+            return "event_id UNIQUE index is incompatible"
+        return None
+
     def _verify_legacy_v02_columns(self, connection: sqlite3.Connection) -> None:
-        if self._column_signature(connection) != _LEGACY_V02_COLUMNS:
+        mismatch = self._schema_mismatch(connection, _LEGACY_V02_COLUMNS)
+        if mismatch is not None:
             raise UnsupportedLegacySchemaError(
-                "unrecognized legacy schema; expected the released v0.2 call_events columns"
+                "unrecognized legacy schema; expected the released v0.2 schema: "
+                f"{mismatch}"
             )
 
     def _verify_schema_v2(self, connection: sqlite3.Connection) -> None:
@@ -210,9 +393,20 @@ class CallLedger:
             raise UnsupportedSchemaVersionError(
                 "schema version 2 is missing the call_events table"
             )
-        if self._column_signature(connection) != _SCHEMA_V2_COLUMNS:
+        mismatch = self._schema_mismatch(connection, _SCHEMA_V2_COLUMNS)
+        if mismatch is not None:
             raise UnsupportedSchemaVersionError(
-                "schema version 2 has incompatible call_events columns"
+                f"schema version 2 has incompatible call_events schema: {mismatch}"
+            )
+        invalid_versions = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM call_events WHERE schema_version IS NULL OR schema_version <> ?",
+                (SCHEMA_VERSION,),
+            ).fetchone()[0]
+        )
+        if invalid_versions:
+            raise UnsupportedSchemaVersionError(
+                "schema version 2 contains noncanonical event schema_version rows"
             )
 
     @staticmethod
@@ -287,7 +481,8 @@ class CallLedger:
             "ON call_events(session_id, fingerprint, seq)"
         )
 
-    def _migrate_v02_to_v2(self, connection: sqlite3.Connection) -> None:
+    @staticmethod
+    def _prepare_legacy_rows(connection: sqlite3.Connection) -> list[tuple[int, str, str]]:
         prepared_rows: list[tuple[int, str, str]] = []
         for row in connection.execute(
             "SELECT seq, phase, source, metadata_json FROM call_events ORDER BY seq"
@@ -311,7 +506,10 @@ class CallLedger:
                     json.dumps(safe, ensure_ascii=False, sort_keys=True),
                 )
             )
+        return prepared_rows
 
+    def _migrate_v02_to_v2(self, connection: sqlite3.Connection) -> None:
+        prepared_rows = self._prepare_legacy_rows(connection)
         connection.execute("PRAGMA secure_delete = ON")
         for name, column_type in _V2_ADDED_COLUMNS:
             connection.execute(f"ALTER TABLE call_events ADD COLUMN {name} {column_type}")
@@ -415,6 +613,7 @@ class CallLedger:
 
     @staticmethod
     def _insert(connection: sqlite3.Connection, event: CallEvent) -> None:
+        policy_facts = _validate_event_boundary(event)
         safe_metadata = sanitize_metadata(event.metadata, source=event.source)
         safe_metadata_json = json.dumps(
             safe_metadata,
@@ -423,9 +622,9 @@ class CallLedger:
         )
         policy_facts_json = (
             None
-            if event.policy_facts is None
+            if policy_facts is None
             else json.dumps(
-                dict(event.policy_facts),
+                policy_facts,
                 ensure_ascii=False,
                 sort_keys=True,
             )
