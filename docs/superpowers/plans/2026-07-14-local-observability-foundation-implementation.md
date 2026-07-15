@@ -18,7 +18,7 @@
 - Plugin defaults are `observe`, `balanced`, `medium`, seven retention days, a 24-hour stale-reservation threshold, and a 1,000 ms SQLite busy timeout.
 - SQLite is authoritative. The plugin never writes a live JSONL mirror; JSONL is a sanitized export format. The legacy `jsonl_path` argument and `export-jsonl` command warn for one release.
 - Never persist raw prompts, objectives, tool inputs, tool outputs, exception messages, Codex host identifiers, authorization headers, API keys, email addresses, or home-directory paths.
-- Codex hooks may return only a documented `systemMessage` warning. They must never claim veto or firewall behavior and must exit `0` without hook output after internal failure.
+- The host Codex `PreToolUse` contract supports denial for supported calls through `hookSpecificOutput.permissionDecision: "deny"`. Agent Call Governor v0.3 deliberately does not emit that shape: its bundled hooks return at most a documented `systemMessage`, remain observe/warn-only, and exit `0` without hook output after internal failure. Product copy must distinguish host capability from this product boundary and must not claim firewall behavior.
 - Fingerprint canonicalization sorts JSON object keys only and preserves list order, string case, whitespace, and every material tool argument. Host adapters remove explicitly enumerated delivery identifiers from the host envelope before constructing material inputs; fingerprint code never strips matching key names recursively from tool arguments.
 - `unknown` is the default progress for successful Codex tool and subagent completion. No LLM call is used to classify progress.
 - Do not add policy replay, compare/explain commands, near-duplicate enforcement, cloud telemetry, a daemon, a dashboard, MCP proxying, or new framework integrations in v0.3.0.
@@ -2010,10 +2010,10 @@ Expected: five consecutive multiprocess passes; all ledger/dispatcher regression
 Start this task by loading `superpowers:writing-skills`. Extract the released v0.2 skill with `git show v0.2.0:agent-call-governor/SKILL.md` and give that unmodified snapshot to a fresh agent with this exact prompt:
 
 ```text
-You have Agent Call Governor v0.2 instructions only. Explain how to install the root Codex plugin, where its six hook events store data, how to inspect and delete one session, and whether a Codex hook can block a tool call. Cite the repository paths or commands you relied on.
+You have Agent Call Governor v0.2 instructions only. Explain how to install the root Codex plugin, where its six hook events store data, how to inspect and delete one session, whether Agent Call Governor v0.3's installed hook currently blocks a tool call, and separately whether the host Codex PreToolUse contract supports denial. Cite the repository paths or commands you relied on.
 ```
 
-Record the verbatim prompt, agent answer, and failures in `evals/skill-baseline-v0.2.md`. RED criteria are any missing root-plugin install, missing `SessionStart`/`Stop`, missing inspect/delete command, or a claim that Codex hooks can veto calls. Do not modify `SKILL.md` until this baseline is saved.
+Record the verbatim prompt, agent answer, tag and commit SHA, run date, available agent/model identifier, and four-part failure matrix in `evals/skill-baseline-v0.2.md`. RED criteria are missing root-plugin install, missing any of the six events or `PLUGIN_DATA`, missing exact inspect/delete commands, or failure to distinguish host-supported denial from ACG v0.3's deliberate observe/warn-only implementation. Do not modify `SKILL.md` until this baseline is saved.
 
 - [ ] **Step 2: Add exact documentation assertions before changing prose**
 
@@ -2065,9 +2065,9 @@ Contributing and roadmap / 기여 및 로드맵
 Primary install instructions are:
 
 ```text
-1. Run `codex plugin marketplace add Kimuhwan/Agent-Call-Governor --ref main`.
-2. Open Codex and enter `/plugins`.
-3. Select Agent Call Governor, choose Install plugin, trust the local hooks, and start a new task.
+1. In Codex Desktop, open the Plugins directory or Settings -> Plugins and add/install `Kimuhwan/Agent-Call-Governor` at ref `main`. When the shell command is available, `codex plugin marketplace add Kimuhwan/Agent-Call-Governor --ref main` is the separate CLI equivalent.
+2. Open `/hooks`, review the current hook content and exact hash, and explicitly trust that exact version. Installation or enablement does not imply hook trust; changed hook content must be reviewed and trusted again.
+3. Start a new task only after the trusted hook is shown as active.
 4. The plugin alone now records local events. To add the shell CLI, run `python -m pip install https://github.com/Kimuhwan/Agent-Call-Governor/releases/download/v0.3.0/agent_call_governor_runtime-0.3.0-py3-none-any.whl`.
 5. For CLI access to plugin events, set `AGENT_CALL_GOVERNOR_DB` to an owner-only path before starting Codex and pass that same path with `--db`; without an override, plugin hooks keep their database under host-provided `PLUGIN_DATA`.
 6. Run `agent-call-governor-runtime doctor --plugin-root PATH_TO_CHECKOUT --db PATH_TO_EVENTS` when validating a checkout.
@@ -2075,11 +2075,11 @@ Primary install instructions are:
 
 State that app installation is the supported interactive path, hooks require trust, state stays under `PLUGIN_DATA` unless the user explicitly overrides the database, the companion wheel is required for global console commands, and skill-only installers are compatibility-only. Update those installers to copy `skills/agent-call-governor` and document Windows as `powershell -ExecutionPolicy Bypass -File .\install.ps1`. Document separate plugin disable/remove, wheel upgrade/uninstall, and database retention/deletion commands so removing one surface is not misrepresented as removing the others.
 
-Write `docs/architecture.md` with data flow `Codex event -> dispatcher -> normalizer -> policy -> SQLite -> CLI/export`; `docs/limitations.md` with no hook veto, no near-duplicate enforcement, no replay, nullable usage/cost, directional evidence, the conservative rule that a crashed Codex session lacking `session.stopped` is skipped by automatic retention until manually deleted, and the one-time v0.2-to-v0.3 duplicate epoch reset (legacy-v1 rows still count for budget/progress but are not exact v2 duplicate candidates); `docs/security.md` with threat model, redaction, permissions, seven-day retention, deletion caveat, no telemetry, and Windows ACL best effort; `docs/benchmark-methodology.md` ordered by task success, under-call rate, false-block rate, then call efficiency.
+Write `docs/architecture.md` with data flow `Codex event -> dispatcher -> normalizer -> policy -> SQLite -> CLI/export`; `docs/limitations.md` with the host-supported `PreToolUse` denial shape separated from ACG v0.3's deliberate observe/warn-only implementation, no near-duplicate enforcement, no replay, nullable usage/cost, directional evidence, the conservative rule that a crashed Codex session lacking `session.stopped` is skipped by automatic retention until manually deleted, and the one-time v0.2-to-v0.3 duplicate epoch reset (legacy-v1 rows still count for budget/progress but are not exact v2 duplicate candidates); `docs/security.md` with threat model, redaction, exact-hash hook trust, permissions, seven-day retention, deletion caveat, no telemetry, and Windows ACL best effort; `docs/benchmark-methodology.md` ordered by task success, under-call rate, false-block rate, then call efficiency.
 
-Link hook and installation claims directly to the official Codex sources `https://learn.chatgpt.com/docs/hooks.md` and `https://learn.chatgpt.com/docs/build-plugins.md`. Do not copy long passages; summarize the current contract and date the compatibility note `2026-07-14`.
+Link hook and installation claims directly to the official Codex sources `https://learn.chatgpt.com/docs/hooks.md` and `https://learn.chatgpt.com/docs/build-plugins.md`. Do not copy long passages; summarize the current contract and date the compatibility note `2026-07-15`.
 
-Write `CHANGELOG.md` with released `0.1.0`, `0.2.0`, and unreleased `0.3.0` sections; `CONTRIBUTING.md` with setup, TDD, full verification, privacy canaries, and PR checklist; root `SECURITY.md` with supported `0.3.x`, private GitHub vulnerability reporting, no public secret disclosure, and response expectations without promising a fixed SLA.
+Write `CHANGELOG.md` with released `0.1.0`, `0.2.0`, and `## [0.3.0] - Unreleased`; `CONTRIBUTING.md` with setup, TDD, full verification, privacy canaries, and PR checklist; root `SECURITY.md` with supported `0.3.x`, no public secret disclosure, and no fixed response SLA. Private GitHub vulnerability reporting is currently disabled, so do not claim it is available; state the missing private channel honestly unless the user separately authorizes and completes that repository-setting change.
 
 - [ ] **Step 4: Forward-test the revised skill with a fresh agent and validate both languages**
 
@@ -2108,7 +2108,7 @@ Expected: documentation assertions PASS; official skill validation prints a succ
 **Files:**
 - Create: `evals/instrumentation_tasks.json`
 - Create: `evals/run_instrumentation_evals.py`
-- Create: `evals/instrumentation-results-2026-07-14.md`
+- Create: `evals/instrumentation-results-2026-07-15.md`
 - Modify: `evals/README.md`
 - Modify: `tests/test_fingerprint.py`
 - Modify: `tests/test_runtime_cli.py`
@@ -2229,18 +2229,18 @@ Each selected test already creates its own temporary database or pure in-memory 
 Run:
 
 ```powershell
-python evals/run_instrumentation_evals.py | Tee-Object -FilePath evals/instrumentation-results-2026-07-14.json
+python evals/run_instrumentation_evals.py | Tee-Object -FilePath evals/instrumentation-results-2026-07-15.json
 python -m unittest tests.test_runtime_cli -v
 ```
 
 Expected: JSON reports `total: 10`, `passed: 10`, and `failures: []`; tests PASS.
 
-Convert the measured JSON to `evals/instrumentation-results-2026-07-14.md` with sections `Scope`, `Environment`, `Results`, `Failures`, and `Interpretation`. Include all ten measured detail strings, state that failures are empty only if the run says so, and explicitly say: `This pilot tests instrumentation and deterministic governance accuracy; it does not measure model response quality.` Remove the transient `.json` after the Markdown result captures it. Update `evals/README.md` to link the pilot after the existing policy and matched A/B evidence.
+Convert the measured JSON to `evals/instrumentation-results-2026-07-15.md` with sections `Scope`, `Environment`, `Results`, `Failures`, and `Interpretation`. Include all ten measured detail strings, state that failures are empty only if the run says so, and explicitly say: `This pilot tests instrumentation and deterministic governance accuracy; it does not measure model response quality.` Remove the transient `.json` after the Markdown result captures it. Update `evals/README.md` to link the pilot after the existing policy and matched A/B evidence.
 
 - [ ] **Step 5: Commit the reproducible pilot and measured result**
 
 ```powershell
-& "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" add evals/instrumentation_tasks.json evals/run_instrumentation_evals.py evals/instrumentation-results-2026-07-14.md evals/README.md tests/test_fingerprint.py tests/test_runtime_cli.py
+& "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" add evals/instrumentation_tasks.json evals/run_instrumentation_evals.py evals/instrumentation-results-2026-07-15.md evals/README.md tests/test_fingerprint.py tests/test_runtime_cli.py
 & "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" commit -m "Publish v0.3 instrumentation pilot"
 ```
 
@@ -2390,14 +2390,17 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-Implement `scripts/build_plugin_archive.py` so the ZIP is deterministic and private state cannot enter it:
+Implement `scripts/build_plugin_archive.py` so the ZIP is deterministic and private state cannot enter it. The candidate set must come from `git ls-files`, filtered through the explicit release allowlist; never recursively enumerate the worktree. Reject symlinks, Windows reparse points, non-regular files, and any resolved path outside the repository root:
 
 ```python
 from __future__ import annotations
 
 import argparse
+import os
+import stat
+import subprocess
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 INCLUDE = (
@@ -2411,20 +2414,50 @@ EXCLUDED_PARTS = frozenset({
 EXCLUDED_SUFFIXES = (".pyc", ".pyo", ".sqlite3", ".db", ".jsonl", ".env")
 
 
+def _is_reparse(info: os.stat_result) -> bool:
+    return bool(
+        getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    )
+
+
+def _allowed(relative: Path) -> bool:
+    return any(relative == Path(name) or Path(name) in relative.parents for name in INCLUDE)
+
+
 def _included_files(root: Path) -> list[Path]:
     files: list[Path] = []
-    for name in INCLUDE:
-        path = root / name
-        candidates = path.rglob("*") if path.is_dir() else (path,)
-        for candidate in candidates:
-            relative = candidate.relative_to(root)
-            if not candidate.is_file():
-                continue
-            if any(part in EXCLUDED_PARTS or part.endswith(".egg-info") for part in relative.parts):
-                continue
-            if candidate.name.endswith(EXCLUDED_SUFFIXES):
-                continue
-            files.append(candidate)
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        check=True,
+        capture_output=True,
+    )
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        pure = PurePosixPath(raw.decode("utf-8"))
+        if pure.is_absolute() or ".." in pure.parts:
+            raise ValueError("unsafe tracked path")
+        relative = Path(*pure.parts)
+        if not _allowed(relative):
+            continue
+        if any(part in EXCLUDED_PARTS or part.endswith(".egg-info") for part in relative.parts):
+            continue
+        if relative.name.endswith(EXCLUDED_SUFFIXES):
+            continue
+        candidate = root / relative
+        current = root
+        for part in relative.parts:
+            current /= part
+            info = current.lstat()
+            if stat.S_ISLNK(info.st_mode) or _is_reparse(info):
+                raise ValueError("release input cannot be a link or reparse point")
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("release input must be a regular file")
+        resolved = candidate.resolve(strict=True)
+        if os.path.commonpath((str(root), str(resolved))) != str(root):
+            raise ValueError("release input escapes repository root")
+        files.append(candidate)
     return sorted(set(files), key=lambda item: item.relative_to(root).as_posix())
 
 
@@ -2527,7 +2560,7 @@ python -m agent_call_governor_runtime doctor --plugin-root . --db $releaseSmokeD
 
 Expected: every command exits `0`; all unit tests pass; all three evals report zero failures; both official validators pass; wheel, sdist, and plugin ZIP exist; doctor has no fail check; `git diff --check` is silent. The only untracked/modified release outputs before commit may be `docs/releases/v0.3.0.md` and the intended changelog edit; `dist/` remains ignored.
 
-Change `CHANGELOG.md` heading from `Unreleased 0.3.0` to `0.3.0 - 2026-07-14`, then commit:
+Change `CHANGELOG.md` heading from `## [0.3.0] - Unreleased` to `## [0.3.0] - 2026-07-15`, then commit:
 
 ```powershell
 & "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" add .github scripts tests/test_release_package.py docs/releases/v0.3.0.md CHANGELOG.md
@@ -2548,9 +2581,10 @@ Expected: all required GitHub checks pass. Review the PR diff for raw privacy ca
 
 ```powershell
 gh pr merge --squash
-& "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" checkout main
-& "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" pull --ff-only origin main
-$releaseCommit = & "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" rev-parse HEAD
+$mainWorktree = "C:\Users\Students\Documents\AgentCall"
+& "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" -C $mainWorktree pull --ff-only origin main
+$releaseCommit = & "C:\Users\Students\.cache\codex-runtimes\codex-primary-runtime\dependencies\native\git\cmd\git.exe" -C $mainWorktree rev-parse HEAD
+Set-Location -LiteralPath $mainWorktree
 ```
 
 Do not create the tag yet. Build the final artifacts from the merged commit into a unique external directory, generate the standalone checksum asset, and install the exact wheel into a clean virtual environment:
@@ -2573,7 +2607,7 @@ $runtimeCli = Join-Path $releaseVenv "Scripts\agent-call-governor-runtime.exe"
 & $runtimeCli doctor --plugin-root . --db $smokeDb --json
 ```
 
-Expected: the clean wheel install succeeds and `doctor` has no fail check. Before tagging, perform one visible Codex Desktop smoke against `main` while it still resolves to `$releaseCommit`, using the same controlled database. Fully quit any already-running Codex app first so it cannot retain an old environment. In the release PowerShell, set the database override, start a fresh Codex process that inherits it, add this repository as a marketplace at `main`, install Agent Call Governor through `/plugins`, and explicitly trust the hooks. This is an interactive trust boundary: pause for the user instead of attempting to approve hook trust on their behalf.
+Expected: the clean wheel install succeeds and `doctor` has no fail check. Before tagging, perform one visible Codex Desktop smoke against `main` while it still resolves to `$releaseCommit`, using the same controlled database. Fully quit any already-running Codex app first so it cannot retain an old environment. In the release PowerShell, set the database override, start a fresh Codex process that inherits it, add this repository at `main` through the Codex Desktop Plugins directory or Settings -> Plugins, and install Agent Call Governor. Then pause for the user to open `/hooks`, review the current content and exact hash, and explicitly trust that exact version. This is an interactive trust boundary: installing/enabling does not imply trust, and no agent may approve, bypass, or infer it. Any hook content change invalidates the smoke and requires re-trust and a full rerun.
 
 ```powershell
 $env:AGENT_CALL_GOVERNOR_DB = $smokeDb
