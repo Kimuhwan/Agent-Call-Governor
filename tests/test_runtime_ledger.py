@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from agent_call_governor_runtime.ledger import CallLedger
 from agent_call_governor_runtime.models import CallEvent, CallProposal
+from agent_call_governor_runtime.policy import evaluate
 
 
 def digest_reference(value):
@@ -81,6 +82,10 @@ class RuntimeLedgerTests(unittest.TestCase):
         values.update(overrides)
         return CallEvent.create(**values)
 
+    def test_jsonl_path_emits_one_release_deprecation_warning(self):
+        with self.assertWarnsRegex(DeprecationWarning, "jsonl_path"):
+            CallLedger(self.root / "deprecated.sqlite3", self.root / "deprecated.jsonl")
+
     def assert_read_apis_reject_storage(self, ledger, call_id, field):
         read_operations = {
             "events": lambda: ledger.events("session-1"),
@@ -122,6 +127,118 @@ class RuntimeLedgerTests(unittest.TestCase):
             with self.subTest(field=field):
                 with self.assertRaisesRegex(ValueError, field):
                     self.event("started", **{field: value})
+
+    def test_call_event_accepts_unknown_operational_progress(self):
+        event = self.event("cancelled", progress="unknown")
+
+        self.ledger.append(event)
+
+        self.assertEqual(self.ledger.events("session-1")[0].progress, "unknown")
+
+        completed = self.event("completed", call_id="call-2", progress="unknown")
+        self.ledger.append(completed)
+        history = self.ledger.history("session-1")
+        self.assertEqual(
+            history,
+            [
+                {
+                    "fingerprint": digest_reference("fp-1"),
+                    "fingerprint_version": 2,
+                    "budget_kind": "agent",
+                }
+            ],
+        )
+        proposal = CallProposal(
+            session_id="session-1",
+            objective="Inspect a different failure",
+            route="different-agent",
+            capability_gap="New evidence is needed",
+            expected_new_information="A distinct root cause",
+            stop_condition="The new cause is identified",
+            material_inputs={"scope": "different"},
+        )
+        self.assertTrue(evaluate(proposal.to_policy_document(history))["allowed"])
+
+    def test_non_call_canonical_events_do_not_enter_policy_history(self):
+        for index, (phase, event_type) in enumerate(
+            (
+                ("started", "session.started"),
+                ("completed", "progress.observed"),
+                ("completed", "session.stopped"),
+            ),
+            start=1,
+        ):
+            self.ledger.append(self.event(
+                phase,
+                call_id=f"non-call-{index}",
+                fingerprint=digest_reference(f"non-call-{index}"),
+                event_type=event_type,
+            ))
+
+        self.assertEqual(len(self.ledger.events("session-1")), 3)
+        self.assertEqual(self.ledger.history("session-1"), [])
+
+    def test_auxiliary_progress_does_not_replace_call_lifecycle_state(self):
+        self.ledger.append(self.event(
+            "completed",
+            call_id="completed-call",
+            fingerprint=digest_reference("completed-call"),
+            progress="material_progress",
+        ))
+        self.ledger.append(self.event(
+            "completed",
+            call_id="completed-call",
+            fingerprint=digest_reference("completed-call"),
+            event_type="progress.observed",
+            progress="material_progress",
+        ))
+        self.ledger.append(self.event(
+            "started",
+            call_id="cancelled-call",
+            fingerprint=digest_reference("cancelled-call"),
+        ))
+        self.ledger.append(self.event(
+            "cancelled",
+            call_id="cancelled-call",
+            fingerprint=digest_reference("cancelled-call"),
+            progress="unknown",
+        ))
+        self.ledger.append(self.event(
+            "completed",
+            call_id="cancelled-call",
+            fingerprint=digest_reference("cancelled-call"),
+            event_type="progress.observed",
+            progress="material_progress",
+        ))
+
+        self.assertEqual(
+            self.ledger.history("session-1"),
+            [
+                {
+                    "fingerprint": digest_reference("completed-call"),
+                    "fingerprint_version": 2,
+                    "budget_kind": "agent",
+                    "progress": "material_progress",
+                }
+            ],
+        )
+
+    def test_history_strictly_decodes_auxiliary_rows_before_projection(self):
+        self.ledger.append(self.event(
+            "completed",
+            call_id="call-auxiliary",
+            event_type="progress.observed",
+        ))
+        self.ledger.append(self.event("completed", call_id="call-auxiliary"))
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute(
+                "UPDATE call_events SET route = ' padded-route ' "
+                "WHERE event_type = 'progress.observed'"
+            )
+            connection.commit()
+
+        with self.assertRaisesRegex(ValueError, "route"):
+            self.ledger.history("session-1")
 
     def test_estimated_cost_requires_pricing_version(self):
         with self.assertRaisesRegex(ValueError, "pricing_version"):

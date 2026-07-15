@@ -8,7 +8,7 @@ from .agents_sdk import (
 )
 from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerprint
 from .ledger import CallLedger
-from .models import CallEvent, CallHandle, CallProposal, RuntimeDecision
+from .models import CallEvent, CallHandle, CallProposal, RuntimeDecision, SessionSummary
 from .policy import evaluate, fingerprint
 from .runtime import GovernedRuntime, GovernanceBlocked, GovernanceError, GovernanceInternalError
 
@@ -25,6 +25,7 @@ __all__ = [
     "GovernanceError",
     "GovernanceInternalError",
     "RuntimeDecision",
+    "SessionSummary",
     "SDKHookCall",
     "build_function_tool_guardrail",
     "build_fingerprint",

@@ -48,6 +48,7 @@ LEGACY_EVENT_TYPES = {
 RUNTIME_MODES = {"observe", "warn", "enforce"}
 FAILURE_POLICIES = {"fail-open", "fail-closed"}
 EVENT_FAILURE_POLICIES = FAILURE_POLICIES | {"legacy-unknown"}
+EVENT_PROGRESS_VALUES = PROGRESS_VALUES | {"unknown"}
 DECISION_VALUES = {"allow", "would_block", "block", "internal_error"}
 STATUS_VALUES = {
     "proposed",
@@ -258,7 +259,7 @@ def _validate_event_boundary(event: "CallEvent") -> dict[str, Any] | None:
     _choice(event.mode, RUNTIME_MODES, "mode")
     _choice(event.failure_policy, EVENT_FAILURE_POLICIES, "failure_policy")
     if event.progress is not None:
-        _choice(event.progress, PROGRESS_VALUES, "progress")
+        _choice(event.progress, EVENT_PROGRESS_VALUES, "progress")
     if event.decision is not None:
         _choice(event.decision, DECISION_VALUES, "decision")
     if event.status is not None:
@@ -431,6 +432,16 @@ class CallHandle:
 
 
 @dataclass(frozen=True)
+class SessionSummary:
+    session_id: str
+    first_observed_at: str
+    last_observed_at: str
+    call_count: int
+    event_count: int
+    final_status: str
+
+
+@dataclass(frozen=True)
 class CallEvent:
     event_id: str
     session_id: str
@@ -532,7 +543,11 @@ class CallEvent:
             _choice(self.failure_policy, EVENT_FAILURE_POLICIES, "failure_policy"),
         )
         if self.progress is not None:
-            object.__setattr__(self, "progress", _choice(self.progress, PROGRESS_VALUES, "progress"))
+            object.__setattr__(
+                self,
+                "progress",
+                _choice(self.progress, EVENT_PROGRESS_VALUES, "progress"),
+            )
         for name in ("policy_allowed", "execution_allowed"):
             object.__setattr__(
                 self,

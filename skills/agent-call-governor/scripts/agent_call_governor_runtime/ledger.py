@@ -3,21 +3,38 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
 import warnings
 from collections.abc import Callable, Sequence
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, TypeVar
 
-from .models import CallEvent, _sanitized_event_metadata, _validate_event_boundary
+from .models import (
+    CallEvent,
+    SessionSummary,
+    _sanitized_event_metadata,
+    _validate_event_boundary,
+)
+from .policy import PROGRESS_VALUES
 
 
 SCHEMA_VERSION = 2
 _MIGRATION_CLEANUP_PENDING = 0x41434732  # ASCII "ACG2"
-_COUNTED_PHASES = ("started", "completed", "failed")
+_COUNTED_EVENT_TYPES = frozenset({
+    "call.started",
+    "call.completed",
+    "call.failed",
+})
+_CALL_LIFECYCLE_EVENT_TYPES = _COUNTED_EVENT_TYPES | {
+    "call.proposed",
+    "call.blocked",
+    "call.cancelled",
+}
 _LEGACY_EVENT_TYPES = {
     "proposed": "call.proposed",
     "blocked": "call.blocked",
@@ -126,6 +143,120 @@ _SQL_TOKEN_PATTERN = re.compile(
     re.DOTALL | re.VERBOSE,
 )
 T = TypeVar("T")
+_TERMINAL_EVENT_TYPES = frozenset({
+    "call.completed",
+    "call.failed",
+    "call.cancelled",
+})
+
+
+def _bounded_integer(
+    value: Any,
+    field_name: str,
+    *,
+    minimum: int,
+    maximum: int | None = None,
+) -> int:
+    if type(value) is not int or value < minimum or (
+        maximum is not None and value > maximum
+    ):
+        bounds = (
+            f"{minimum} through {maximum}"
+            if maximum is not None
+            else f"at least {minimum}"
+        )
+        raise ValueError(f"{field_name} must be an integer from {bounds}")
+    return value
+
+
+def _normalized_datetime(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc)
+    if not isinstance(value, datetime):
+        raise ValueError("now must be a datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _observed_datetime(value: str) -> datetime:
+    try:
+        observed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("observed_at must be an ISO-8601 timestamp") from exc
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        return observed.replace(tzinfo=timezone.utc)
+    return observed.astimezone(timezone.utc)
+
+
+def _has_later_terminal(
+    events: Sequence[CallEvent],
+    index: int,
+    start: CallEvent,
+) -> bool:
+    return any(
+        later.span_id == start.span_id and later.event_type in _TERMINAL_EVENT_TYPES
+        for later in events[index + 1:]
+    )
+
+
+def _trace_is_active(events: Sequence[CallEvent]) -> bool:
+    for index, event in enumerate(events):
+        if event.event_type == "call.started" and not _has_later_terminal(
+            events,
+            index,
+            event,
+        ):
+            return True
+        if event.event_type == "session.started" and not any(
+            later.event_type == "session.stopped" for later in events[index + 1:]
+        ):
+            return True
+    return False
+
+
+def _stale_cancellation(start: CallEvent, observed_now: datetime) -> CallEvent:
+    timestamp = observed_now.isoformat(timespec="microseconds").replace("+00:00", "Z")
+    return CallEvent.create(
+        session_id=start.session_id,
+        call_id=start.call_id,
+        parent_call_id=start.parent_call_id,
+        phase="cancelled",
+        occurred_at=timestamp,
+        objective=start.objective,
+        route=start.route,
+        fingerprint=start.fingerprint,
+        budget_kind=start.budget_kind,
+        profile=start.profile,
+        quality_risk=start.quality_risk,
+        mode=start.mode,
+        policy_allowed=start.policy_allowed,
+        execution_allowed=start.execution_allowed,
+        decision_reason=start.decision_reason,
+        progress="unknown",
+        source=start.source,
+        metadata=start.metadata,
+        event_type="call.cancelled",
+        observed_at=timestamp,
+        trace_id=start.trace_id,
+        turn_id=start.turn_id,
+        span_id=start.span_id,
+        parent_span_id=start.parent_span_id,
+        source_event="stale_reservation_recovered",
+        agent_id=start.agent_id,
+        tool_name=start.tool_name,
+        input_digest=start.input_digest,
+        fingerprint_version=start.fingerprint_version,
+        failure_policy=start.failure_policy,
+        decision=start.decision,
+        reason_code="stale_reservation_recovered",
+        policy_version=start.policy_version,
+        budget_before=start.budget_before,
+        budget_after=start.budget_after,
+        status="cancelled",
+        raw_input_stored=False,
+        policy_facts=start.policy_facts,
+    )
 
 
 def _sql_tokens(value: str) -> tuple[str, ...]:
@@ -186,19 +317,44 @@ class DuplicateCallIdError(ValueError):
 class CallLedger:
     """Persist call lifecycle events and derive policy history per session."""
 
-    def __init__(self, sqlite_path: str | Path, jsonl_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        sqlite_path: str | Path,
+        jsonl_path: str | Path | None = None,
+        *,
+        busy_timeout_ms: int = 30000,
+    ) -> None:
+        self.busy_timeout_ms = _bounded_integer(
+            busy_timeout_ms,
+            "busy_timeout_ms",
+            minimum=0,
+            maximum=60000,
+        )
         self.sqlite_path = Path(sqlite_path).expanduser()
         self.jsonl_path = Path(jsonl_path).expanduser() if jsonl_path is not None else None
         self._jsonl_lock = threading.Lock()
-        self.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        parent_existed = self.sqlite_path.parent.exists()
+        self.sqlite_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt" and not parent_existed:
+            self.sqlite_path.parent.chmod(0o700)
         if self.jsonl_path is not None:
+            warnings.warn(
+                "jsonl_path is deprecated; SQLite is the authoritative ledger",
+                DeprecationWarning,
+                stacklevel=2,
+            )
             self.jsonl_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        if os.name != "nt":
+            self.sqlite_path.chmod(0o600)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.sqlite_path), timeout=30)
+        connection = sqlite3.connect(
+            str(self.sqlite_path),
+            timeout=self.busy_timeout_ms / 1000,
+        )
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
         return connection
 
     def _initialize(self) -> None:
@@ -861,6 +1017,142 @@ class CallLedger:
             rows = connection.execute(query, parameters).fetchall()
         return [_event_from_row(row) for row in rows]
 
+    def sessions(self) -> list[SessionSummary]:
+        """Summarize operational traces."""
+        grouped: dict[str, list[CallEvent]] = {}
+        with closing(self._connect()) as connection:
+            rows = connection.execute("SELECT * FROM call_events ORDER BY seq").fetchall()
+        for row in rows:
+            event = _event_from_row(row)
+            grouped.setdefault(event.trace_id, []).append(event)
+
+        summaries: list[SessionSummary] = []
+        for trace_id, events in grouped.items():
+            first_event = min(events, key=lambda event: _observed_datetime(event.observed_at))
+            last_event = max(events, key=lambda event: _observed_datetime(event.observed_at))
+            proposed_calls = {
+                event.call_id for event in events if event.event_type == "call.proposed"
+            }
+            summaries.append(
+                SessionSummary(
+                    session_id=trace_id,
+                    first_observed_at=first_event.observed_at,
+                    last_observed_at=last_event.observed_at,
+                    call_count=len(proposed_calls),
+                    event_count=len(events),
+                    final_status="active" if _trace_is_active(events) else events[-1].event_type,
+                )
+            )
+        return summaries
+
+    def inspect_session(self, session_id: str) -> list[CallEvent]:
+        """Return canonical events for one operational trace in sequence order."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                "SELECT * FROM call_events WHERE trace_id = ? ORDER BY seq",
+                (session_id,),
+            ).fetchall()
+        return [_event_from_row(row) for row in rows]
+
+    def delete_session(self, session_id: str) -> int:
+        """Securely delete one operational trace and reclaim SQLite storage."""
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("PRAGMA secure_delete = ON")
+                connection.execute("BEGIN IMMEDIATE")
+                cursor = connection.execute(
+                    "DELETE FROM call_events WHERE trace_id = ?",
+                    (session_id,),
+                )
+                deleted = cursor.rowcount
+                connection.commit()
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                connection.execute("VACUUM")
+            except BaseException:
+                connection.rollback()
+                raise
+        return deleted
+
+    def prune_expired_sessions(
+        self,
+        retention_days: int,
+        *,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """Securely remove closed traces older than the retention cutoff."""
+        days = _bounded_integer(retention_days, "retention_days", minimum=1)
+        cutoff = _normalized_datetime(now) - timedelta(days=days)
+        removed: list[str] = []
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("PRAGMA secure_delete = ON")
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute("SELECT * FROM call_events ORDER BY seq").fetchall()
+                grouped: dict[str, list[CallEvent]] = {}
+                for row in rows:
+                    event = _event_from_row(row)
+                    grouped.setdefault(event.trace_id, []).append(event)
+                for trace_id, events in grouped.items():
+                    last_observed = max(
+                        _observed_datetime(event.observed_at) for event in events
+                    )
+                    if last_observed < cutoff and not _trace_is_active(events):
+                        connection.execute(
+                            "DELETE FROM call_events WHERE trace_id = ?",
+                            (trace_id,),
+                        )
+                        removed.append(trace_id)
+                connection.commit()
+                if removed:
+                    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    connection.execute("VACUUM")
+            except BaseException:
+                connection.rollback()
+                raise
+        return removed
+
+    def recover_stale_reservations(
+        self,
+        trace_id: str,
+        stale_after_seconds: int,
+        *,
+        now: datetime | None = None,
+    ) -> int:
+        """Append canonical cancellations for stale open calls in one trace."""
+        threshold = _bounded_integer(
+            stale_after_seconds,
+            "stale_after_seconds",
+            minimum=0,
+        )
+        if threshold == 0:
+            return 0
+        observed_now = _normalized_datetime(now)
+        cutoff = observed_now - timedelta(seconds=threshold)
+        recovery_events: list[CallEvent] = []
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    "SELECT * FROM call_events WHERE trace_id = ? ORDER BY seq",
+                    (trace_id,),
+                ).fetchall()
+                events = [_event_from_row(row) for row in rows]
+                for index, event in enumerate(events):
+                    if (
+                        event.event_type == "call.started"
+                        and _observed_datetime(event.observed_at) < cutoff
+                        and not _has_later_terminal(events, index, event)
+                    ):
+                        cancellation = _stale_cancellation(event, observed_now)
+                        self._insert(connection, cancellation)
+                        recovery_events.append(cancellation)
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        self._mirror_best_effort(recovery_events)
+        return len(recovery_events)
+
     def latest_event(self, session_id: str, call_id: str) -> CallEvent | None:
         """Return the latest persisted phase for a call, if it exists."""
         with closing(self._connect()) as connection:
@@ -881,22 +1173,19 @@ class CallLedger:
 
     @staticmethod
     def _history(connection: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
-        query = """
-            SELECT event.*
-            FROM call_events AS event
-            JOIN (
-                SELECT call_id, MAX(seq) AS latest_seq
-                FROM call_events
-                WHERE session_id = ?
-                GROUP BY call_id
-            ) AS latest ON event.seq = latest.latest_seq
-            ORDER BY event.seq
-        """
-        rows = connection.execute(query, (session_id,)).fetchall()
-        history: list[dict[str, Any]] = []
-        for row in rows:
+        rows = connection.execute(
+            "SELECT * FROM call_events WHERE session_id = ? ORDER BY seq",
+            (session_id,),
+        ).fetchall()
+        latest_lifecycle: dict[str, tuple[int, CallEvent]] = {}
+        for index, row in enumerate(rows):
             event = _event_from_row(row)
-            if event.phase not in _COUNTED_PHASES:
+            if event.event_type in _CALL_LIFECYCLE_EVENT_TYPES:
+                latest_lifecycle[event.call_id] = (index, event)
+
+        history: list[dict[str, Any]] = []
+        for _, event in sorted(latest_lifecycle.values()):
+            if event.event_type not in _COUNTED_EVENT_TYPES:
                 continue
             item: dict[str, Any] = {
                 "fingerprint": event.fingerprint,
@@ -904,7 +1193,7 @@ class CallLedger:
             }
             if event.fingerprint_version is not None:
                 item["fingerprint_version"] = event.fingerprint_version
-            if event.progress is not None:
+            if event.progress in PROGRESS_VALUES:
                 item["progress"] = event.progress
             history.append(item)
         return history
