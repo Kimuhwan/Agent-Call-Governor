@@ -1,127 +1,94 @@
 ---
 name: agent-call-governor
-description: Govern agent delegation and repeated tool use with quality-preserving routing, risk-aware budgets, duplicate fingerprints, progress gates, and stop conditions. Apply before delegating to subagents, spawning parallel agents, retrying a tool or agent call, or planning a multi-call workflow; use especially when call cost, latency, runaway delegation, or under-calling could affect task quality.
+description: Govern agent delegation and direct-tool calls with minimum-sufficient, quality-preserving routing, risk floors, exact-duplicate evidence, progress gates, and stop conditions; inspect, report, export, or delete local Codex plugin sessions. Use before spawning agents, retrying calls, or planning multi-call work; when cost, latency, runaway delegation, under-calling, uncertainty, or high-risk verification matters; and when users ask about Agent Call Governor installation, hooks, storage, local activity, privacy, exports, or cleanup.
 ---
 
 # Agent Call Governor
 
-Use the minimum sufficient delegation that completes the task correctly. Optimize for successful task completion first and call reduction second. Apply this policy in the current agent; never delegate merely to decide whether delegation is necessary.
+Complete the task with the minimum sufficient calls. Optimize for task success first and call efficiency second. Apply this policy in the current agent; never delegate merely to decide whether to delegate.
 
-## Protect the quality floor
+## Decide the route
 
-Treat budgets as ceilings for ordinary work, not targets and not absolute bans. Before reducing a route or stopping, check whether doing so would materially increase the risk of an incorrect, stale, unsafe, or incomplete result.
+1. State the concrete objective and classify the proposed call as `agent` or `direct-tool`.
+2. Identify the capability gap, expected new information, material inputs, and observable stop condition.
+3. Choose the first sufficient route:
+   - use supplied context and local reasoning;
+   - use one batched direct tool;
+   - delegate one bounded specialist task;
+   - use multiple agents only for independent work that needs distinct capabilities and reconciliation.
+4. Select `balanced` by default. Select `strict` for reversible, low-risk work or `quality-first` for uncertain, high-impact, or costly-to-correct work. Treat `quality-first` as a profile, never a mode.
+5. Set separate budgets for agent and direct-tool calls. Apply the profile's quality/risk floor before enforcing a requested ceiling.
+6. Evaluate mandatory calls, exact duplicates, progress, and remaining budget before execution.
 
-Escalate the route or budget when any of these signals is present:
+Read [references/profiles.md](references/profiles.md) for numeric limits. Use `python scripts/governor.py evaluate proposal.json` for complex workflows and read [references/proposal-schema.md](references/proposal-schema.md) before preparing the input. Skip the script when the decision is obvious.
 
-- material factual uncertainty remains;
-- the decision is high stakes or hard to reverse;
-- independent verification could catch a costly error;
-- evidence spans distinct systems or domains;
-- acceptance criteria are not yet demonstrated; or
-- a required action has not actually occurred.
+## Preserve the quality floor
 
-Never claim savings when the task success rate falls. Measure under-calling alongside redundant calls.
+Increase the route or effective budget when material uncertainty remains, consequences are hard to reverse, independent verification could catch a costly error, evidence spans systems, acceptance criteria are unproven, or a required action has not occurred.
 
-## Choose the lightest governance layer
+Allow calls required for current information, explicit verification, high-stakes work, private state, missing files, user-requested actions, safety, or system instructions. Let a valid mandatory reason bypass budget and progress stops, but never let it bypass an exact duplicate that could repeat an external side effect.
 
-Use the in-agent policy in this file for ordinary Codex work. Do not install or configure runtime components merely because the skill triggered.
+Allow high-risk work at least one materially changed-strategy retry after low progress. Do not claim a governance improvement when task success falls; track under-calling and false blocks alongside redundant calls.
 
-When the user's development task calls for reusable enforcement, choose the narrowest sufficient integration:
+## Require exact duplicate evidence
 
-- use `scripts/governor.py evaluate` for one deterministic proposal decision;
-- use `CallProposal`, `CallLedger`, and `GovernedRuntime` for application-owned Python calls that must be recorded or blocked before execution;
-- use Codex lifecycle hooks only for `observe` or `warn`; read [references/codex-hooks.md](references/codex-hooks.md) and never claim those hooks provide a pre-tool or pre-subagent veto;
-- for OpenAI Agents SDK code, read [references/openai-agents-sdk.md](references/openai-agents-sdk.md), wrap a complete run with `GovernedRunner`, or attach the supported function-tool input guardrail.
+Build fingerprint-v2 from the objective, route, material inputs, working directory, tool version, and optional state token. Treat a call as an exact duplicate only when a stored `fingerprint_version: 2` candidate has the same canonical digest.
 
-Roll runtime enforcement out as `observe`, then `warn`, then `enforce`. Choose `fail-open` when availability is the priority and `fail-closed` when an unevaluated or unrecorded call must not proceed. State the selected boundary; do not describe wrapped-call enforcement as a universal firewall.
+Do not treat semantic similarity or a near match as an exact duplicate. Change the objective, material inputs, source, parameters, strategy, or state token when a real retry needs new evidence. Legacy fingerprint-v1 rows may continue budget and progress accounting, but never use them as exact fingerprint-v2 duplicate candidates.
 
-## Route work from cheapest to strongest
+## Gate on observed progress
 
-Consider these routes in order and choose the first sufficient one:
-
-1. Use the conversation, supplied materials, and local reasoning.
-2. Use one direct deterministic tool, batching independent reads when supported.
-3. Delegate one bounded task to one specialist agent.
-4. Use multiple agents only for independent subproblems that benefit from meaningfully different capabilities and require reconciliation.
-
-Do not move to a stronger route until the weaker route has a concrete capability gap.
-
-Treat direct tools and agents differently. A file read, search, database query, or API lookup is a direct tool call when it returns the needed state itself. Do not wrap it in an agent unless interpretation or multi-step judgment is the actual gap.
-
-## Test necessity before each call
-
-Permit a call only when all of the following are recorded compactly:
-
-- `capability_gap`: what cannot be completed from current context
-- `expected_new_information`: the specific new state or result expected
-- `cheapest_sufficient_route`: why this call is the least expensive sufficient route
-- `remaining_budget`: calls available after this call
-- `stop_condition`: the observable result that ends the search
-- `normalized_call_fingerprint`: the stable identity of objective, route, and material inputs
-
-Do not expose private reasoning. Share only brief, user-relevant progress updates.
-
-Reject the call if the capability gap, expected result, or stop condition is vague. Default to no call when necessity is unclear.
-
-## Select a profile and budget
-
-Use `balanced` unless the user, risk, or task explicitly justifies another profile:
-
-- `strict`: prefer lower latency and cost for reversible, low-risk work;
-- `balanced`: preserve ordinary quality while removing redundant calls;
-- `quality-first`: allow more verification for high-impact, uncertain, or expensive-to-correct work.
-
-Read [references/profiles.md](references/profiles.md) when selecting numeric limits or configuring the deterministic gate.
-
-Allow at least one materially changed-strategy retry for high-risk work, even under `strict`. Stop it only after the retry makes no progress, the result becomes sufficient, or the quality floor is otherwise satisfied.
-
-Count agent calls separately from direct tool calls.
-
-| Work type | Agent budget | Direct-tool guidance |
-| --- | ---: | --- |
-| Writing, rewriting, translation, formatting, or summarizing supplied content | 0 | Usually 0 |
-| One current fact or state read | 0 | One batched lookup |
-| One bounded specialist task | 1 | As needed for its evidence |
-| Repository or multi-document investigation and implementation | 2 | Batch related reads |
-| Clearly decomposable multi-domain work | 3 | Require explicit reconciliation |
-
-Allow at most one handoff. Allow no identical retry. Raise a budget for quality-floor signals, a system or developer requirement, an explicit user request, high-stakes verification, or genuinely independent decomposition. State the reason in a user-relevant progress update when the increase is material.
-
-## Block duplicates
-
-Normalize a proposed call from its objective, route or capability, and material inputs. Exclude timestamps, generated IDs, ordering that is explicitly known not to change meaning, and wording-only differences. In the generic deterministic gate, preserve string case and list order by default; an application may pre-normalize only fields whose schema explicitly declares them case-insensitive or unordered.
-
-Reject a proposed call when:
-
-- its normalized fingerprint matches a completed or pending call;
-- it pursues the same objective with materially identical inputs;
-- an earlier result already satisfies the stop condition;
-- it is cosmetic validation without material uncertainty or risk; or
-- it is unlikely to produce new information.
-
-Permit one retry only when the query, parameters, source, or strategy changes materially. Record a new fingerprint and the changed assumption.
-
-Apply duplicate prevention before mandatory exceptions. An explicit request does not authorize repeating an identical completed external action; require changed inputs or a new objective.
-
-For complex or long-running workflows, run `python scripts/governor.py evaluate proposal.json` to apply deterministic risk floors, budget, progress, and duplicate checks. Read [references/proposal-schema.md](references/proposal-schema.md) when preparing the JSON input. Do not run the script for a simple decision that is already obvious.
-
-When a runtime ledger is already in use, treat its SQLite history as authoritative. JSONL is an optional best-effort audit mirror. Do not put raw objectives/prompts, material inputs, tool arguments, results, transcripts, or exception messages into events or event metadata; store objective hash references, fingerprints, and explicitly safe operational fields only.
-
-## Gate on progress
-
-After every result, classify it as:
+Classify each completed call using evidence:
 
 - `sufficient`: stop calling and complete the task;
-- `material_progress`: continue only if a defined gap remains within budget;
-- `low_progress`: allow at most one changed-strategy call;
-- `no_progress`: stop delegation and provide the best supported result or report the blocker.
+- `material_progress`: continue only for a defined remaining gap;
+- `low_progress`: allow only a permitted materially changed-strategy retry;
+- `no_progress`: stop or report the blocker;
+- `unknown`: consume budget but trigger no progress stop or retry rule.
 
-Recalculate the cheapest sufficient route after every result. Never continue merely to increase confidence cosmetically.
+Use `unknown` when the host provides no deterministic signal. Never promote absence of evidence into progress. Recalculate the cheapest sufficient route after every result.
 
-## Preserve mandatory calls
+## Inspect local plugin activity
 
-Do not suppress calls required for current or rapidly changing information, explicit verification, high-stakes factual checking, private account or connector access, missing file retrieval, explicit user-requested actions, safety requirements, or system and developer instructions.
+Treat plugin installation, hook trust, the companion wheel, and compatibility-only skill installation as separate surfaces. Installing the skill alone does not create plugin events.
 
-When a mandatory call exceeds budget, allow it and record the reason. Still block an identical fingerprint to prevent duplicate external side effects.
+Install the repository-root Codex plugin from Codex Desktop's Plugins directory or **Settings -> Plugins**. The marketplace can be registered separately from a shell:
 
-Prefer a complete answer with clearly stated uncertainty over speculative extra calls. Prefer necessary verification over an answer whose uncertainty would be materially misleading.
+```powershell
+codex plugin marketplace add Kimuhwan/Agent-Call-Governor --ref main
+```
+
+After installation or enablement, open `/hooks`, review the hook, and explicitly trust its exact current hash. Do not infer trust from installation. Re-review and re-trust after any hook content change.
+
+Install the companion wheel when global `agent-call-governor-runtime` commands are needed:
+
+```powershell
+python -m pip install https://github.com/Kimuhwan/Agent-Call-Governor/releases/download/v0.3.0/agent_call_governor_runtime-0.3.0-py3-none-any.whl
+```
+
+The plugin records `SessionStart`, `PreToolUse`, `PostToolUse`, `SubagentStart`, `SubagentStop`, and `Stop`. It defaults to the host-provided `PLUGIN_DATA` directory and stores the authoritative ledger at `PLUGIN_DATA/events.sqlite3`.
+
+If `AGENT_CALL_GOVERNOR_DB` overrides that location, set it before launching Codex and pass the same path as `--db` to every CLI command. Discover the hashed session reference with `sessions`, then inspect, summarize, export, or delete it:
+
+```powershell
+agent-call-governor-runtime doctor --plugin-root PATH_TO_CHECKOUT --db PATH_TO_EVENTS
+agent-call-governor-runtime sessions --db PATH_TO_EVENTS
+agent-call-governor-runtime inspect SESSION_ID --db PATH_TO_EVENTS
+agent-call-governor-runtime report --db PATH_TO_EVENTS
+agent-call-governor-runtime export --format jsonl --output PATH_TO_EXPORT --db PATH_TO_EVENTS
+agent-call-governor-runtime delete-session SESSION_ID --yes --db PATH_TO_EVENTS
+```
+
+Treat SQLite as authoritative. Treat JSONL as a sanitized point-in-time export or legacy compatibility format; the bundled plugin dispatcher configures no live JSONL mirror. Read [references/codex-hooks.md](references/codex-hooks.md) before configuring or explaining hook behavior.
+
+## State the enforcement boundary
+
+Keep the bundled Codex hook in `observe` or `warn`. It is fail-open and does not emit a denial, so Agent Call Governor v0.3 is not an agent-call firewall. In `warn`, a call that policy would reject can still execute.
+
+Distinguish that product choice from the host contract: supported Codex `PreToolUse` hooks can deny with `hookSpecificOutput.permissionDecision: "deny"`. Use an application-owned `GovernedRuntime` wrapper when this project must enforce a decision before an owned Python call executes. Never describe wrapped-call enforcement as universal Codex enforcement.
+
+## Protect local data
+
+Persist only hashed host identifiers and objectives, fingerprint and lifecycle facts, decisions, progress, durations, nullable usage/cost fields, and explicitly safe metadata. Do not persist raw prompts, tool inputs, tool results, transcripts, last assistant messages, or exception messages. Treat report counts as directional evidence: separate policy decisions from execution because observe/warn calls may proceed.
+
+Read [references/codex-hooks.md](references/codex-hooks.md) for storage, trust, retention, and compatibility details. Read [references/openai-agents-sdk.md](references/openai-agents-sdk.md) only when integrating with the OpenAI Agents SDK.

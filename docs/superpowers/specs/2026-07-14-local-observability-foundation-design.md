@@ -24,7 +24,7 @@ Use this public description:
 
 The primary product is the Codex plugin. The Python runtime wrapper and OpenAI Agents SDK adapter remain supported compatibility integrations, but they are secondary surfaces and receive no new feature expansion in this release.
 
-Codex hooks remain `observe` or `warn` only. The current Codex hook contract supports warnings through `systemMessage`, but does not expose a dependable pre-tool or pre-subagent veto. Application-owned wrappers and supported SDK guardrails may still enforce their explicitly wrapped boundaries.
+Codex hooks in Agent Call Governor remain `observe` or `warn` only. Compatibility update (2026-07-15): the host supports denial for a supported `PreToolUse` call through `hookSpecificOutput.permissionDecision: "deny"`, but this plugin deliberately does not emit that shape; `SubagentStart` does not provide the same boundary. Application-owned wrappers and supported SDK guardrails may still enforce their explicitly wrapped boundaries.
 
 Do not use these claims:
 
@@ -334,7 +334,7 @@ The bundled dispatcher is process-level fail-open:
 - the dispatcher exits `0` without hook output on internal failure; and
 - valid warn decisions return only documented `systemMessage` output.
 
-This fail-open rule applies to the Codex plugin surface because the current hook contract is a guardrail and warning surface. It does not change the explicit fail-open/fail-closed behavior of application-owned wrappers.
+This fail-open rule applies because the Agent Call Governor plugin deliberately implements an observe/warn surface and does not emit the host's supported `PreToolUse` denial shape. It does not change the explicit fail-open/fail-closed behavior of application-owned wrappers.
 
 ## Configuration axes
 
@@ -523,4 +523,4 @@ policy-replay <session-id> --profile ...
 compare <session-id> --profiles ...
 ```
 
-Replay must consume only the stored privacy-safe policy facts, reproduce reason codes deterministically, and never re-execute a model or tool. Codex hook enforcement remains deferred until the official hook contract exposes and documents a reliable veto.
+Replay must consume only the stored privacy-safe policy facts, reproduce reason codes deterministically, and never re-execute a model or tool. Adopting the host's supported `PreToolUse` denial shape remains a separate product decision that requires explicit enforcement semantics, trust review, rollout gates, and measured false-block protection; `SubagentStart` does not provide the same boundary.

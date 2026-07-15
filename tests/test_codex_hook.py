@@ -247,7 +247,7 @@ class CodexHookTests(unittest.TestCase):
         }, self.runtime()))
         self.assertEqual(self.ledger.events(), [])
 
-    def test_enforce_mode_is_rejected_because_codex_hooks_cannot_veto(self) -> None:
+    def test_enforce_mode_is_rejected_by_observe_warn_adapter_contract(self) -> None:
         with self.assertRaisesRegex(ValueError, "observe or warn"):
             handle_codex_hook(load_fixture("pre_tool_use.json"), self.runtime(mode="enforce"))
 

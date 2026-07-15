@@ -1,4 +1,4 @@
 interface:
   display_name: "Agent Call Governor"
-  short_description: "Govern prompt and runtime calls without sacrificing quality"
-  default_prompt: "Use $agent-call-governor in balanced mode to complete this task with the minimum sufficient delegation."
+  short_description: "Govern calls and inspect local Codex activity"
+  default_prompt: "Use $agent-call-governor to choose minimum sufficient calls, preserve quality, and inspect local plugin activity when needed."

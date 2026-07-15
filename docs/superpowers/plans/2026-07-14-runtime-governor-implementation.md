@@ -4,7 +4,7 @@
 
 **Goal:** Add authoritative runtime call recording and enforceable application-owned pre-call/post-call governance while preserving the existing Codex skill and policy CLI.
 
-**Architecture:** Keep one standard-library Python policy core inside the installed skill, add a SQLite-first event ledger with an optional JSONL mirror, and expose synchronous/asynchronous wrappers. Codex hooks provide observation and warning because current hook contracts cannot veto; the optional OpenAI Agents SDK adapter adds workflow hooks and supported function-tool guardrail integration.
+**Architecture:** Keep one standard-library Python policy core inside the installed skill, add a SQLite-first event ledger with an optional compatibility JSONL mirror, and expose synchronous/asynchronous wrappers. The bundled Codex adapter provides observation and warning and does not emit the host's supported `PreToolUse` denial shape; the optional OpenAI Agents SDK adapter adds workflow hooks and supported function-tool guardrail integration.
 
 **Tech Stack:** Python 3.10+, `unittest`, SQLite, JSONL, optional `openai-agents>=0.18.2,<0.19`, GitHub Actions.
 
@@ -234,7 +234,7 @@ Expected: missing `codex_hook` module.
 
 - [ ] **Step 3: Implement tolerant event mapping and CLI**
 
-Map official events to proposal/start/end records, derive stable call IDs from supplied IDs, and sanitize payloads. Reject `enforce` configuration with a message explaining the current Codex veto limitation.
+Map official events to proposal/start/end records, derive stable call IDs from supplied IDs, and sanitize payloads. Reject `enforce` configuration with a message explaining that this adapter is deliberately observe/warn-only and does not emit the host's supported `PreToolUse` denial shape.
 
 - [ ] **Step 4: Run hook tests and command-line smoke fixtures**
 

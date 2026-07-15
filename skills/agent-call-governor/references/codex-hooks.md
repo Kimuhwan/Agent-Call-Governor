@@ -1,65 +1,88 @@
-# Codex lifecycle hooks
+# Codex plugin hooks
 
-Agent Call Governor can record these current Codex lifecycle events:
+Use this reference when installing, trusting, operating, or explaining the repository-root Codex plugin. This contract was checked against the official Codex documentation on 2026-07-15:
 
-- `PreToolUse` and `PostToolUse`
-- `SubagentStart` and `SubagentStop`
+- [Codex hooks](https://learn.chatgpt.com/docs/hooks.md)
+- [Build Codex plugins](https://learn.chatgpt.com/docs/build-plugins.md)
 
-The adapter stores policy and lifecycle metadata in SQLite and can mirror it to
-JSONL. It hashes `tool_input` for duplicate detection and does not store raw tool
-arguments, tool results, transcripts, or the last assistant message.
+## Install and trust
 
-Policy budgets and duplicate history use hashed session and turn references when
-Codex supplies a turn ID. Original `session_id`, `turn_id`, `tool_use_id`, and
-`agent_id` values are not persisted; SHA-256 references retain correlation.
-Payloads without a turn ID fall back to a call-local scope, favoring quality over
-carrying a stale budget across unrelated tasks. Re-delivery of the same start or
-terminal host ID is idempotent; a real second call must have a new host ID and is
-then evaluated by fingerprint.
-
-## Capability boundary
-
-Use `--mode observe` first, then `--mode warn` after reviewing the ledger.
-Current Codex hook contracts do not provide a dependable pre-call veto:
-
-- `PreToolUse` accepts `systemMessage`, but its common stop fields are unsupported.
-- `SubagentStart` can surface context or warnings, but `continue: false` does not
-  stop the subagent from starting.
-- matching command hooks may launch concurrently.
-
-Therefore this adapter intentionally rejects `enforce`. Use the application-owned
-`GovernedRuntime` wrapper when a call must be blocked before execution.
-
-## Configure
-
-Install the Python package, copy `examples/codex-hooks.json` to a supported
-`hooks.json` location, then replace every absolute script and database path.
-Codex asks you to review and trust a new or changed command hook before it runs.
-
-The same command handles all four events:
+Install or enable **Agent Call Governor** from the Codex Desktop Plugins directory or **Settings -> Plugins**. To register its GitHub marketplace from a shell, run:
 
 ```powershell
-agent-call-governor-runtime codex-hook `
-  --mode observe `
-  --db C:\absolute\governor-data\events.sqlite3 `
-  --jsonl C:\absolute\governor-data\events.jsonl
+codex plugin marketplace add Kimuhwan/Agent-Call-Governor --ref main
 ```
 
-When the runtime package is not installed as a command, use the script directly:
+Treat registration, installation, and hook trust as separate steps. Installing or enabling a plugin does not trust its command hooks. Open `/hooks`, inspect the command and content, and approve the exact current hook hash. New or changed hook content is skipped until the user reviews and trusts it again. Never bypass or automate that decision.
+
+Compatibility-only `install.ps1` and `install.sh` copy the skill but do not install the repository-root plugin or create hook data.
+
+## Observe six events
+
+The plugin's `hooks/hooks.json` sends these six lifecycle events to `hooks/dispatch.py`:
+
+- `SessionStart`
+- `PreToolUse`
+- `PostToolUse`
+- `SubagentStart`
+- `SubagentStop`
+- `Stop`
+
+Follow this data path:
+
+`Codex event -> dispatcher -> normalizer -> policy -> SQLite -> CLI/export`
+
+The host supplies `PLUGIN_ROOT` and `PLUGIN_DATA`. The dispatcher loads its bundled Python runtime from `PLUGIN_ROOT` and defaults to `PLUGIN_DATA/events.sqlite3`. To use another database, set `AGENT_CALL_GOVERNOR_DB` before launching Codex, fully restart Codex, and pass the same path with `--db` to the companion CLI.
+
+The dispatcher supports these pre-launch settings:
+
+- `AGENT_CALL_GOVERNOR_MODE`: `observe` or `warn`; default `observe`.
+- `AGENT_CALL_GOVERNOR_PROFILE`: `strict`, `balanced`, or `quality-first`; default `balanced`.
+- `AGENT_CALL_GOVERNOR_RISK`: `low`, `medium`, or `high`; default `medium`.
+- `AGENT_CALL_GOVERNOR_RETENTION_DAYS`: 1 through 3650; default 7.
+- `AGENT_CALL_GOVERNOR_STALE_SECONDS`: stale reservation recovery window; default 86400.
+
+`quality-first` is a profile, not a mode.
+
+## Inspect and clean up
+
+Install the v0.3.0 companion wheel to expose the global CLI:
 
 ```powershell
-python C:\absolute\Agent-Call-Governor\skills\agent-call-governor\scripts\codex_hook.py `
-  --mode observe `
-  --db C:\absolute\governor-data\events.sqlite3 `
-  --jsonl C:\absolute\governor-data\events.jsonl
+python -m pip install https://github.com/Kimuhwan/Agent-Call-Governor/releases/download/v0.3.0/agent_call_governor_runtime-0.3.0-py3-none-any.whl
 ```
 
-Switch to `warn` to surface a `systemMessage` when the policy would block a call.
-The call still proceeds. Omit `--jsonl` when only the authoritative SQLite ledger
-is needed.
+Use the same `PATH_TO_EVENTS` that the plugin uses:
 
-## Failure policy
+```powershell
+agent-call-governor-runtime doctor --plugin-root PATH_TO_CHECKOUT --db PATH_TO_EVENTS
+agent-call-governor-runtime sessions --db PATH_TO_EVENTS
+agent-call-governor-runtime inspect SESSION_ID --db PATH_TO_EVENTS
+agent-call-governor-runtime report --db PATH_TO_EVENTS
+agent-call-governor-runtime export --format jsonl --output PATH_TO_EXPORT --db PATH_TO_EVENTS
+agent-call-governor-runtime delete-session SESSION_ID --yes --db PATH_TO_EVENTS
+```
 
-The default is `--failure-policy fail-open`, which avoids breaking Codex if the
-policy or ledger fails. `fail-closed` makes the hook command fail, but that still
-does not turn unsupported Codex hook events into an agent-call firewall.
+Use the hashed session reference printed by `sessions` as `SESSION_ID`. Add `--session SESSION_ID` to `report` or `export` to limit output to one trace. Deletion removes that trace and attempts SQLite secure cleanup; it does not uninstall the plugin, wheel, or skill.
+
+Treat SQLite as the authoritative local ledger. The bundled dispatcher never passes a JSONL path. Use `export --format jsonl` for a sanitized point-in-time export; treat the deprecated `export-jsonl` command and manual `codex-hook --jsonl` surface as legacy compatibility, not live plugin mirroring.
+
+## Keep the boundary honest
+
+The current host contract supports denying a supported `PreToolUse` call with `hookSpecificOutput.permissionDecision: "deny"`. Agent Call Governor v0.3 deliberately does not emit that response. Its bundled dispatcher is observe/warn-only and fail-open:
+
+- `observe` records the policy decision without surfacing a warning.
+- `warn` may return a `systemMessage`, but the call still proceeds.
+- dispatcher errors return success after a type-only diagnostic so Codex availability is preserved.
+
+Do not call the installed plugin an agent-call firewall. Use application-owned `GovernedRuntime` enforcement only for Python calls that the application itself controls.
+
+## Interpret the ledger safely
+
+The normalizer hashes host session, turn, tool-use, and agent identifiers. It does not persist raw tool inputs, tool results, prompts, transcripts, last assistant messages, or exception messages. It records safe lifecycle, policy, progress, timing, and nullable usage/cost facts. Local file permissions are best effort on Windows; `doctor` reports that limitation.
+
+Fingerprint-v2 provides exact-duplicate evidence only within its current epoch. Legacy fingerprint-v1 rows still contribute to budget and progress history but are not exact v2 duplicate candidates. Near-duplicate or semantic replay detection is not implemented.
+
+Unknown progress is neutral: it consumes budget but does not trigger sufficient, low-progress, or no-progress rules. Policy decisions and execution outcomes are separate; a `would_block` decision in observe/warn mode may still have a `call.started` event. Treat reports as directional evidence rather than proof of response quality.
+
+Retention is opportunistic at `SessionStart` and `Stop`. A crashed session may lack `session.stopped`; automatic retention treats it as active and skips it until an operator runs `delete-session`. Exports are not automatically deleted with their source session.
