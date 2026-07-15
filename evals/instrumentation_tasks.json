@@ -1,0 +1,12 @@
+[
+  {"name": "same-file-read-twice", "expected": "same_fingerprint", "test_id": "tests.test_fingerprint.FingerprintTests.test_exact_file_read_repeats_same_fingerprint"},
+  {"name": "changed-state-token", "expected": "new_fingerprint", "test_id": "tests.test_fingerprint.FingerprintTests.test_exact_patch_and_state_token_are_material"},
+  {"name": "same-bash-command-twice", "expected": "same_fingerprint", "test_id": "tests.test_fingerprint.FingerprintTests.test_exact_bash_repeat_same_fingerprint"},
+  {"name": "bash-direction-change", "expected": "new_fingerprint", "test_id": "tests.test_fingerprint.FingerprintTests.test_bash_direction_and_cwd_are_material"},
+  {"name": "mcp-object-key-order", "expected": "same_fingerprint", "test_id": "tests.test_fingerprint.FingerprintTests.test_object_key_order_is_equivalent"},
+  {"name": "high-risk-low-progress-changed-strategy-retry", "expected": "retry_allowed", "test_id": "tests.test_governor.GovernorTests.test_strict_high_risk_allows_one_changed_strategy_retry"},
+  {"name": "parallel-final-budget-slot", "expected": "one_allow_one_would_block", "test_id": "tests.test_multiprocess_hooks.MultiprocessHookTests.test_two_processes_compete_for_one_policy_budget_slot"},
+  {"name": "locked-database-dispatch", "expected": "zero_exit_under_three_seconds", "test_id": "tests.test_multiprocess_hooks.MultiprocessHookTests.test_exclusive_database_lock_returns_zero_within_three_seconds"},
+  {"name": "stale-reservation-recovery", "expected": "append_cancelled", "test_id": "tests.test_ledger_operations.LedgerOperationTests.test_stale_recovery_appends_cancellation_without_mutating_start"},
+  {"name": "sqlite-reopen-persistence", "expected": "history_preserved_after_reopen", "test_id": "tests.test_runtime_ledger.RuntimeLedgerTests.test_reopening_sqlite_preserves_events"}
+]

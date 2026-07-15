@@ -39,6 +39,16 @@ The checked-in set contains **64 workloads and 128 call steps**. The runner repo
 
 Latest checked-in result: **64/64**, with **96/96 necessary calls preserved**, **32/32 redundant calls blocked**, and **0 under-call failures**. See [runtime-results-2026-07-14.md](runtime-results-2026-07-14.md).
 
+## 3. Instrumentation pilot
+
+```bash
+python evals/run_instrumentation_evals.py
+```
+
+This local, deterministic pilot runs exactly ten checked-in unit and integration tests selected by `instrumentation_tasks.json`. It covers exact and changed fingerprints, a changed-strategy high-risk retry after low progress, multi-process budget contention, bounded locked-database handling, stale-reservation recovery, and SQLite reopen persistence.
+
+Latest checked-in result: **10/10**. See [instrumentation-results-2026-07-15.md](instrumentation-results-2026-07-15.md). The pilot measures these selected instrumentation and deterministic-governance contracts only; it does not measure model response quality, production performance, cost savings, semantic near-duplicate detection, policy replay, or host-level firewall enforcement.
+
 ## What these scores mean
 
 These are deterministic regression scores for the checked-in cases. They demonstrate that the current implementation behaves consistently on those inputs. They do not prove:

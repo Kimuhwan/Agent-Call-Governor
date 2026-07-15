@@ -35,6 +35,16 @@ class FingerprintTests(unittest.TestCase):
         self.assertEqual(self.build("mcp:lookup", {"a": 1, "b": 2}).digest,
                          self.build("mcp:lookup", {"b": 2, "a": 1}).digest)
 
+    def test_exact_file_read_repeats_same_fingerprint(self) -> None:
+        first = self.build("Read", {"path": "src/app.py"}, cwd="C:/repo")
+        second = self.build("Read", {"path": "src/app.py"}, cwd="C:/repo")
+        self.assertEqual(first.digest, second.digest)
+
+    def test_exact_bash_repeat_same_fingerprint(self) -> None:
+        first = self.build("Bash", {"command": "git status --short"}, cwd="C:/repo")
+        second = self.build("Bash", {"command": "git status --short"}, cwd="C:/repo")
+        self.assertEqual(first.digest, second.digest)
+
     def test_list_order_case_and_whitespace_are_material(self) -> None:
         self.assertNotEqual(self.build("mcp:lookup", {"q": ["A", "b"]}).digest,
                             self.build("mcp:lookup", {"q": ["b", "A"]}).digest)
