@@ -81,6 +81,17 @@ class RuntimeLedgerTests(unittest.TestCase):
         values.update(overrides)
         return CallEvent.create(**values)
 
+    def assert_read_apis_reject_storage(self, ledger, call_id, field):
+        read_operations = {
+            "events": lambda: ledger.events("session-1"),
+            "latest_event": lambda: ledger.latest_event("session-1", call_id),
+            "history": lambda: ledger.history("session-1"),
+        }
+        for api_name, operation in read_operations.items():
+            with self.subTest(field=field, api=api_name):
+                with self.assertRaisesRegex(ValueError, field):
+                    operation()
+
     def test_legacy_create_arguments_project_canonical_v2_fields(self):
         event = self.event("started")
 
@@ -582,6 +593,95 @@ class RuntimeLedgerTests(unittest.TestCase):
 
                 with self.assertRaisesRegex(ValueError, field):
                     ledger.history("session-1")
+
+    def test_read_apis_reject_constructor_normalized_storage(self):
+        invalid_values = {
+            "schema_version": 1,
+            "event_type": None,
+            "observed_at": None,
+            "trace_id": None,
+            "span_id": None,
+            "source_event": None,
+            "objective": "private plaintext objective",
+            "event_id": " padded-event-id ",
+        }
+        for index, (field, value) in enumerate(invalid_values.items()):
+            with self.subTest(field=field):
+                root = self.root / f"normalized-storage-{index}"
+                ledger = CallLedger(root / "events.sqlite3")
+                call_id = f"normalized-storage-{index}"
+                ledger.append(self.event("completed", call_id=call_id))
+                with closing(sqlite3.connect(root / "events.sqlite3")) as connection:
+                    connection.execute(
+                        f'UPDATE call_events SET "{field}" = ?',
+                        (value,),
+                    )
+                    connection.commit()
+
+                self.assert_read_apis_reject_storage(ledger, call_id, field)
+
+    def test_history_strictly_decodes_corrupt_latest_phase_before_counting(self):
+        self.ledger.append(self.event("completed"))
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            connection.execute("UPDATE call_events SET phase = 'corrupt-phase'")
+            connection.commit()
+
+        with self.assertRaisesRegex(ValueError, "phase"):
+            self.ledger.history("session-1")
+
+    def test_read_apis_reject_strict_sqlite_type_and_domain_corruption(self):
+        invalid_values = (
+            ("seq", 0),
+            ("policy_allowed", sqlite3.Binary(b"1")),
+            ("prompt_tokens", 1.5),
+            ("route", " specialist-agent "),
+            (
+                "safe_metadata_json",
+                json.dumps({"raw_prompt": "STORAGE-PLAINTEXT-CANARY"}),
+            ),
+        )
+        for index, (field, value) in enumerate(invalid_values):
+            with self.subTest(field=field):
+                root = self.root / f"strict-storage-{index}"
+                ledger = CallLedger(root / "events.sqlite3")
+                call_id = f"strict-storage-{index}"
+                ledger.append(self.event("completed", call_id=call_id))
+                with closing(sqlite3.connect(root / "events.sqlite3")) as connection:
+                    connection.execute(
+                        f'UPDATE call_events SET "{field}" = ?',
+                        (value,),
+                    )
+                    connection.commit()
+
+                self.assert_read_apis_reject_storage(ledger, call_id, field)
+
+    def test_read_apis_preserve_released_bare_v1_fingerprint(self):
+        fingerprint = "b" * 64
+        self.ledger.append(
+            self.event(
+                "completed",
+                fingerprint=fingerprint,
+                fingerprint_version=1,
+                progress="sufficient",
+            )
+        )
+
+        self.assertEqual(self.ledger.events()[0].fingerprint, fingerprint)
+        self.assertEqual(
+            self.ledger.latest_event("session-1", "call-1").fingerprint,
+            fingerprint,
+        )
+        self.assertEqual(
+            self.ledger.history("session-1"),
+            [
+                {
+                    "fingerprint": fingerprint,
+                    "fingerprint_version": 1,
+                    "progress": "sufficient",
+                    "budget_kind": "agent",
+                }
+            ],
+        )
 
     def test_started_call_counts_once_and_blocked_call_does_not(self):
         self.ledger.append(

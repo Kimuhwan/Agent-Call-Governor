@@ -881,8 +881,7 @@ class CallLedger:
 
     @staticmethod
     def _history(connection: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
-        placeholders = ",".join("?" for _ in _COUNTED_PHASES)
-        query = f"""
+        query = """
             SELECT event.*
             FROM call_events AS event
             JOIN (
@@ -891,13 +890,14 @@ class CallLedger:
                 WHERE session_id = ?
                 GROUP BY call_id
             ) AS latest ON event.seq = latest.latest_seq
-            WHERE event.phase IN ({placeholders})
             ORDER BY event.seq
         """
-        rows = connection.execute(query, (session_id, *_COUNTED_PHASES)).fetchall()
+        rows = connection.execute(query, (session_id,)).fetchall()
         history: list[dict[str, Any]] = []
         for row in rows:
             event = _event_from_row(row)
+            if event.phase not in _COUNTED_PHASES:
+                continue
             item: dict[str, Any] = {
                 "fingerprint": event.fingerprint,
                 "budget_kind": event.budget_kind,
@@ -929,77 +929,194 @@ def _false_from_storage(value: Any, field_name: str) -> bool:
 
 
 def _event_from_row(row: sqlite3.Row) -> CallEvent:
-    metadata_raw = (
-        row["safe_metadata_json"]
-        if row["safe_metadata_json"] is not None
-        else row["metadata_json"]
+    seq = row["seq"]
+    if type(seq) is not int or seq <= 0:
+        raise ValueError("stored event seq must be a positive integer")
+    try:
+        metadata = _json_object_from_storage(
+            row["safe_metadata_json"],
+            "safe_metadata_json",
+        )
+        policy_facts = (
+            None
+            if row["policy_facts_json"] is None
+            else _json_object_from_storage(
+                row["policy_facts_json"],
+                "policy_facts_json",
+            )
+        )
+        event = CallEvent(
+            schema_version=row["schema_version"],
+            event_id=row["event_id"],
+            session_id=row["session_id"],
+            call_id=row["call_id"],
+            parent_call_id=row["parent_call_id"],
+            phase=row["phase"],
+            occurred_at=row["occurred_at"],
+            objective=row["objective"],
+            route=row["route"],
+            fingerprint=row["fingerprint"],
+            budget_kind=row["budget_kind"],
+            profile=row["profile"],
+            quality_risk=row["quality_risk"],
+            mode=row["mode"],
+            event_type=row["event_type"],
+            observed_at=row["observed_at"],
+            trace_id=row["trace_id"],
+            turn_id=row["turn_id"],
+            span_id=row["span_id"],
+            parent_span_id=row["parent_span_id"],
+            source_event=row["source_event"],
+            policy_allowed=_optional_bool_from_storage(
+                row["policy_allowed"],
+                "policy_allowed",
+            ),
+            execution_allowed=_optional_bool_from_storage(
+                row["execution_allowed"],
+                "execution_allowed",
+            ),
+            decision_reason=row["decision_reason"],
+            progress=row["progress"],
+            duration_ms=row["duration_ms"],
+            source=row["source"],
+            metadata=metadata,
+            error_type=row["error_type"],
+            agent_id=row["agent_id"],
+            tool_name=row["tool_name"],
+            input_digest=row["input_digest"],
+            fingerprint_version=row["fingerprint_version"],
+            failure_policy=row["failure_policy"],
+            decision=row["decision"],
+            reason_code=row["reason_code"],
+            policy_version=row["policy_version"],
+            budget_before=row["budget_before"],
+            budget_after=row["budget_after"],
+            decision_latency_ms=row["decision_latency_ms"],
+            execution_latency_ms=row["execution_latency_ms"],
+            status=row["status"],
+            prompt_tokens=row["prompt_tokens"],
+            completion_tokens=row["completion_tokens"],
+            total_tokens=row["total_tokens"],
+            estimated_cost_usd=row["estimated_cost_usd"],
+            pricing_version=row["pricing_version"],
+            raw_input_stored=_false_from_storage(
+                row["raw_input_stored"],
+                "raw_input_stored",
+            ),
+            policy_facts=policy_facts,
+        )
+        if row["parent_span_id"] is None:
+            object.__setattr__(event, "parent_span_id", None)
+        validated_policy_facts = _validate_event_boundary(event)
+        _validate_canonical_storage_row(
+            row,
+            event,
+            validated_policy_facts,
+        )
+    except ValueError as exc:
+        raise ValueError(f"stored event row {seq} is invalid: {exc}") from exc
+    return event
+
+
+def _validate_canonical_storage_row(
+    row: sqlite3.Row,
+    event: CallEvent,
+    policy_facts: dict[str, Any] | None,
+) -> None:
+    scalar_values = {
+        "event_id": event.event_id,
+        "schema_version": event.schema_version,
+        "session_id": event.session_id,
+        "call_id": event.call_id,
+        "parent_call_id": event.parent_call_id,
+        "phase": event.phase,
+        "occurred_at": event.occurred_at,
+        "objective": event.objective,
+        "route": event.route,
+        "fingerprint": event.fingerprint,
+        "budget_kind": event.budget_kind,
+        "profile": event.profile,
+        "quality_risk": event.quality_risk,
+        "mode": event.mode,
+        "policy_allowed": _optional_bool(event.policy_allowed),
+        "execution_allowed": _optional_bool(event.execution_allowed),
+        "decision_reason": event.decision_reason,
+        "progress": event.progress,
+        "duration_ms": event.duration_ms,
+        "source": event.source,
+        "error_type": event.error_type,
+        "event_type": event.event_type,
+        "observed_at": event.observed_at,
+        "trace_id": event.trace_id,
+        "turn_id": event.turn_id,
+        "span_id": event.span_id,
+        "parent_span_id": event.parent_span_id,
+        "source_event": event.source_event,
+        "agent_id": event.agent_id,
+        "tool_name": event.tool_name,
+        "input_digest": event.input_digest,
+        "fingerprint_version": event.fingerprint_version,
+        "failure_policy": event.failure_policy,
+        "decision": event.decision,
+        "reason_code": event.reason_code,
+        "policy_version": event.policy_version,
+        "budget_before": event.budget_before,
+        "budget_after": event.budget_after,
+        "decision_latency_ms": event.decision_latency_ms,
+        "execution_latency_ms": event.execution_latency_ms,
+        "status": event.status,
+        "prompt_tokens": event.prompt_tokens,
+        "completion_tokens": event.completion_tokens,
+        "total_tokens": event.total_tokens,
+        "estimated_cost_usd": event.estimated_cost_usd,
+        "pricing_version": event.pricing_version,
+        "raw_input_stored": int(event.raw_input_stored),
+    }
+    for field_name, canonical_value in scalar_values.items():
+        stored_value = row[field_name]
+        if (
+            type(stored_value) is not type(canonical_value)
+            or stored_value != canonical_value
+        ):
+            raise ValueError(
+                f"{field_name} is not in canonical schema-v2 stored form"
+            )
+
+    safe_metadata_json = json.dumps(
+        _sanitized_event_metadata(event),
+        ensure_ascii=False,
+        sort_keys=True,
     )
-    metadata = _json_object_from_storage(metadata_raw, "safe_metadata_json")
-    policy_facts = (
-        None
-        if row["policy_facts_json"] is None
-        else _json_object_from_storage(row["policy_facts_json"], "policy_facts_json")
-    )
-    return CallEvent(
-        schema_version=row["schema_version"],
-        event_id=row["event_id"],
-        session_id=row["session_id"],
-        call_id=row["call_id"],
-        parent_call_id=row["parent_call_id"],
-        phase=row["phase"],
-        occurred_at=row["occurred_at"],
-        objective=row["objective"],
-        route=row["route"],
-        fingerprint=row["fingerprint"],
-        budget_kind=row["budget_kind"],
-        profile=row["profile"],
-        quality_risk=row["quality_risk"],
-        mode=row["mode"],
-        event_type=row["event_type"],
-        observed_at=row["observed_at"],
-        trace_id=row["trace_id"],
-        turn_id=row["turn_id"],
-        span_id=row["span_id"],
-        parent_span_id=row["parent_span_id"],
-        source_event=row["source_event"],
-        policy_allowed=_optional_bool_from_storage(row["policy_allowed"], "policy_allowed"),
-        execution_allowed=_optional_bool_from_storage(
-            row["execution_allowed"],
-            "execution_allowed",
+    json_values = {
+        "safe_metadata_json": safe_metadata_json,
+        "metadata_json": safe_metadata_json,
+        "policy_facts_json": (
+            None
+            if policy_facts is None
+            else json.dumps(
+                policy_facts,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
         ),
-        decision_reason=row["decision_reason"],
-        progress=row["progress"],
-        duration_ms=row["duration_ms"],
-        source=row["source"],
-        metadata=metadata,
-        error_type=row["error_type"],
-        agent_id=row["agent_id"],
-        tool_name=row["tool_name"],
-        input_digest=row["input_digest"],
-        fingerprint_version=row["fingerprint_version"],
-        failure_policy=row["failure_policy"],
-        decision=row["decision"],
-        reason_code=row["reason_code"],
-        policy_version=row["policy_version"],
-        budget_before=row["budget_before"],
-        budget_after=row["budget_after"],
-        decision_latency_ms=row["decision_latency_ms"],
-        execution_latency_ms=row["execution_latency_ms"],
-        status=row["status"],
-        prompt_tokens=row["prompt_tokens"],
-        completion_tokens=row["completion_tokens"],
-        total_tokens=row["total_tokens"],
-        estimated_cost_usd=row["estimated_cost_usd"],
-        pricing_version=row["pricing_version"],
-        raw_input_stored=_false_from_storage(row["raw_input_stored"], "raw_input_stored"),
-        policy_facts=policy_facts,
-    )
+    }
+    for field_name, canonical_value in json_values.items():
+        stored_value = row[field_name]
+        if (
+            type(stored_value) is not type(canonical_value)
+            or stored_value != canonical_value
+        ):
+            raise ValueError(
+                f"{field_name} is not in canonical schema-v2 stored form"
+            )
 
 
 def _json_object_from_storage(value: Any, field_name: str) -> dict[str, Any]:
+    if type(value) is not str:
+        raise ValueError(f"{field_name} must contain a canonical JSON object string")
     try:
-        decoded = json.loads(str(value))
-    except (TypeError, json.JSONDecodeError) as exc:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
         raise ValueError(f"{field_name} must contain a JSON object") from exc
     if not isinstance(decoded, dict):
         raise ValueError(f"{field_name} must contain a JSON object")
