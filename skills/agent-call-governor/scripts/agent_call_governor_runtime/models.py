@@ -520,6 +520,21 @@ class SessionSummary:
 
 
 @dataclass(frozen=True)
+class DoctorCheck:
+    name: str
+    status: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"pass", "warn", "fail"}:
+            raise ValueError("doctor status must be pass, warn, or fail")
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("doctor name must be a non-empty string")
+        if not isinstance(self.detail, str) or not self.detail:
+            raise ValueError("doctor detail must be a non-empty string")
+
+
+@dataclass(frozen=True)
 class CallEvent:
     event_id: str
     session_id: str

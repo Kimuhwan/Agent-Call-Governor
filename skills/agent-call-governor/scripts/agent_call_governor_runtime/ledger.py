@@ -405,6 +405,18 @@ class CallLedger:
         if os.name != "nt":
             self.sqlite_path.chmod(0o600)
 
+    @classmethod
+    def inspect_schema(cls, sqlite_path: str | Path) -> str:
+        """Classify an existing database through a read-only connection."""
+        path = Path(sqlite_path).expanduser()
+        if not path.exists():
+            return "fresh"
+        uri = path.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True)) as connection:
+            connection.row_factory = sqlite3.Row
+            probe = object.__new__(cls)
+            return probe._classify_schema(connection)
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
             str(self.sqlite_path),

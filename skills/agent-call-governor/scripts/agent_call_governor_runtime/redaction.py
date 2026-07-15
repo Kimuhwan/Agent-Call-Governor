@@ -13,6 +13,8 @@ from .policy import (
     MANDATORY_REASONS,
     POLICY_CONTEXT_FIELDS,
     PROFILE_NAMES,
+    POLICY_REASON_CODES,
+    POLICY_VERSION,
     RISK_VALUES,
 )
 
@@ -55,6 +57,23 @@ _CUSTOM_METADATA_KEY = re.compile(r"custom:[0-9a-f]{64}")
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 _API_KEY = re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b")
 _EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+_SAFE_DECISION_REASONS = POLICY_REASON_CODES | {
+    "internal_error_fail_open",
+    "internal_error_fail_closed",
+}
+_SAFE_REASON_CODES = POLICY_REASON_CODES | {"stale_reservation_recovered"}
+_SAFE_ERROR_TYPES = frozenset({
+    "CancelledError",
+    "CodexToolError",
+    "GovernanceBlocked",
+    "LegacyError",
+    "OSError",
+    "OperationalError",
+    "RuntimeError",
+    "TimeoutError",
+    "ValueError",
+})
+_SAFE_POLICY_VERSIONS = frozenset({POLICY_VERSION, "legacy-v0.2"})
 
 
 def _hash(value: str) -> str:
@@ -154,5 +173,14 @@ def sanitize_event_dict(
     )
     for key in SENSITIVE_KEYS:
         event.pop(key, None)
+    for key, allowed in (
+        ("decision_reason", _SAFE_DECISION_REASONS),
+        ("reason_code", _SAFE_REASON_CODES),
+        ("error_type", _SAFE_ERROR_TYPES),
+        ("policy_version", _SAFE_POLICY_VERSIONS),
+    ):
+        value = event.get(key)
+        if value is not None and value not in allowed:
+            event[key] = _hash(redact_text(str(value), home_directory=home_directory))
     event["raw_input_stored"] = False
     return event
