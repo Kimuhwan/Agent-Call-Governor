@@ -8,7 +8,7 @@ import re
 import sqlite3
 import threading
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +16,7 @@ from typing import Any
 
 from .fingerprint import FINGERPRINT_VERSION
 from .models import (
+    POLICY_FACTS_VERSION,
     CallEvent,
     RuntimeDecision,
     SessionSummary,
@@ -27,9 +28,10 @@ from .policy import (
     POLICY_CONTEXT_FIELDS,
     POLICY_REASON_CODES,
     POLICY_VERSION,
+    PROFILE_LIMITS,
+    PROGRESS_VALUES,
     validate_policy_context,
 )
-from .policy import PROGRESS_VALUES
 
 
 SCHEMA_VERSION = 2
@@ -238,9 +240,6 @@ def _stale_cancellation(start: CallEvent, observed_now: datetime) -> CallEvent:
         profile=start.profile,
         quality_risk=start.quality_risk,
         mode=start.mode,
-        policy_allowed=start.policy_allowed,
-        execution_allowed=start.execution_allowed,
-        decision_reason=start.decision_reason,
         progress="unknown",
         source=start.source,
         metadata=start.metadata,
@@ -256,14 +255,9 @@ def _stale_cancellation(start: CallEvent, observed_now: datetime) -> CallEvent:
         input_digest=start.input_digest,
         fingerprint_version=start.fingerprint_version,
         failure_policy=start.failure_policy,
-        decision=start.decision,
         reason_code="stale_reservation_recovered",
-        policy_version=start.policy_version,
-        budget_before=start.budget_before,
-        budget_after=start.budget_after,
         status="cancelled",
         raw_input_stored=False,
-        policy_facts=start.policy_facts,
     )
 
 
@@ -1323,6 +1317,58 @@ class CallLedger:
         return history
 
 
+def _validate_reservation_policy_facts(
+    facts: Mapping[str, Any],
+    proposal_event: CallEvent,
+    decision: RuntimeDecision,
+    context: Mapping[str, Any] | None,
+) -> None:
+    expected = {
+        "fingerprint": proposal_event.fingerprint,
+        "fingerprint_version": FINGERPRINT_VERSION,
+        "budget_kind": proposal_event.budget_kind,
+        "profile": proposal_event.profile,
+        "risk": proposal_event.quality_risk,
+        "required_fields_present": True,
+        "duplicate_scope": "turn",
+        "policy_facts_version": POLICY_FACTS_VERSION,
+    }
+    if any(facts.get(name) != value for name, value in expected.items()):
+        raise ValueError("atomic transition policy facts contradict canonical fields")
+    if (
+        decision.reason == "changed_strategy_required"
+        and facts["changed_strategy_present"] is not False
+    ):
+        raise ValueError("atomic transition changed-strategy fact contradicts decision")
+    mandatory_reason = facts["mandatory_reason"]
+    if decision.reason in POLICY_REASON_CODES and (
+        (decision.reason == "mandatory_exception" and mandatory_reason is None)
+        or (
+            mandatory_reason is not None
+            and decision.reason
+            not in {"duplicate_fingerprint", "mandatory_exception"}
+        )
+    ):
+        raise ValueError("atomic transition mandatory fact contradicts decision ordering")
+    if context is None:
+        return
+
+    profile_floor = PROFILE_LIMITS[proposal_event.profile][
+        proposal_event.budget_kind
+    ][proposal_event.quality_risk]
+    requested_limit = facts["requested_budget_limit"]
+    resolved_requested_limit = (
+        profile_floor if requested_limit is None else requested_limit
+    )
+    effective_limit = max(resolved_requested_limit, profile_floor)
+    floor_applied = effective_limit != resolved_requested_limit
+    if (
+        context["effective_limit"] != effective_limit
+        or context["budget_floor_applied"] is not floor_applied
+    ):
+        raise ValueError("atomic transition requested budget fact contradicts policy context")
+
+
 def _validate_atomic_reservation(
     events: Sequence[CallEvent],
     decision: RuntimeDecision,
@@ -1424,15 +1470,6 @@ def _validate_atomic_reservation(
     facts = proposal_event.policy_facts
     if facts is None:
         raise ValueError("atomic transition call.proposed must contain policy facts")
-    expected_facts = {
-        "fingerprint": fingerprint,
-        "fingerprint_version": FINGERPRINT_VERSION,
-        "budget_kind": proposal_event.budget_kind,
-        "profile": proposal_event.profile,
-        "risk": proposal_event.quality_risk,
-    }
-    if any(facts.get(name) != value for name, value in expected_facts.items()):
-        raise ValueError("atomic transition policy facts contradict the proposal event")
     if any(event.policy_facts is not None for event in events[1:]):
         raise ValueError("atomic transition policy facts belong only on call.proposed")
     if (
@@ -1440,6 +1477,7 @@ def _validate_atomic_reservation(
         or set(execution_event.metadata) & POLICY_CONTEXT_FIELDS
     ):
         raise ValueError("atomic transition policy context belongs only on policy.decided")
+    context: Mapping[str, Any] | None = None
     if decision.reason.startswith("internal_error_"):
         if decision.context or decision_event.metadata:
             raise ValueError("atomic transition internal-error context must be empty")
@@ -1459,6 +1497,7 @@ def _validate_atomic_reservation(
             )
         ):
             raise ValueError("atomic transition policy context contradicts canonical fields")
+    _validate_reservation_policy_facts(facts, proposal_event, decision, context)
 
     proposal_decision_fields = (
         "policy_allowed",
@@ -1515,7 +1554,6 @@ def _validate_atomic_reservation(
         "execution_allowed",
         "decision_reason",
         "decision",
-        "reason_code",
         "policy_version",
         "budget_before",
         "budget_after",
@@ -1539,6 +1577,34 @@ def _validate_atomic_reservation(
             raise ValueError("atomic transition replay suffix has inconsistent call identity")
         if any(getattr(event, name) is not None for name in terminal_decision_fields):
             raise ValueError("atomic transition terminal suffix contains decision-only fields")
+        if event.progress is None:
+            raise ValueError("atomic transition terminal suffix must contain progress")
+        if event.execution_latency_ms != event.duration_ms:
+            raise ValueError("atomic transition terminal latency fields must match")
+        if event.event_type == "call.completed":
+            if event.error_type is not None or event.reason_code is not None:
+                raise ValueError("atomic transition completed suffix has invalid error fields")
+        elif event.event_type == "call.failed":
+            if event.error_type is None or event.reason_code is not None:
+                raise ValueError("atomic transition failed suffix has invalid error fields")
+        else:
+            stale_recovery = event.source_event == "stale_reservation_recovered"
+            if stale_recovery:
+                if (
+                    event.error_type is not None
+                    or event.progress != "unknown"
+                    or event.reason_code != "stale_reservation_recovered"
+                    or event.duration_ms is not None
+                ):
+                    raise ValueError(
+                        "atomic transition stale cancellation has invalid recovery fields"
+                    )
+            elif (
+                event.error_type != "CancelledError"
+                or event.progress != "no_progress"
+                or event.reason_code is not None
+            ):
+                raise ValueError("atomic transition cancelled suffix has invalid error fields")
 
 
 def _stored_runtime_decision(events: Sequence[CallEvent]) -> RuntimeDecision:

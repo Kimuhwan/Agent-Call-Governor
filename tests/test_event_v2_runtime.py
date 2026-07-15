@@ -8,6 +8,7 @@ import uuid
 import warnings
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_call_governor_runtime import (
@@ -679,6 +680,26 @@ class EventV2RuntimeTests(unittest.TestCase):
                     },
                 ),
             ),
+            "policy facts requested budget": lambda events: events.__setitem__(
+                0,
+                replace(
+                    events[0],
+                    policy_facts={
+                        **dict(events[0].policy_facts),
+                        "requested_budget_limit": 7,
+                    },
+                ),
+            ),
+            "policy facts required fields": lambda events: events.__setitem__(
+                0,
+                replace(
+                    events[0],
+                    policy_facts={
+                        **dict(events[0].policy_facts),
+                        "required_fields_present": False,
+                    },
+                ),
+            ),
         }
         for index, (label, corrupt) in enumerate(corruptions.items()):
             with self.subTest(label=label):
@@ -823,6 +844,198 @@ class EventV2RuntimeTests(unittest.TestCase):
 
         with self.assertRaises(StoredDecisionReplayError):
             self.runtime.begin(proposal(), call_id="host-call-ref")
+
+    def test_replay_rejects_semantically_tampered_policy_facts(self) -> None:
+        corruptions = {
+            "requested budget": {"requested_budget_limit": 7},
+            "required fields": {"required_fields_present": False},
+        }
+        for index, (label, changes) in enumerate(corruptions.items()):
+            with self.subTest(field=label):
+                ledger = CallLedger(
+                    Path(self.tempdir.name) / f"tampered-facts-{index}.sqlite3"
+                )
+                runtime = GovernedRuntime(ledger, mode="observe")
+                call_id = f"tampered-facts-{index}"
+                runtime.begin(proposal(), call_id=call_id)
+                with closing(sqlite3.connect(ledger.sqlite_path)) as connection:
+                    row = connection.execute(
+                        """
+                        SELECT policy_facts_json FROM call_events
+                        WHERE call_id = ? AND event_type = 'call.proposed'
+                        """,
+                        (call_id,),
+                    ).fetchone()
+                    facts = json.loads(row[0])
+                    facts.update(changes)
+                    connection.execute(
+                        """
+                        UPDATE call_events SET policy_facts_json = ?
+                        WHERE call_id = ? AND event_type = 'call.proposed'
+                        """,
+                        (json.dumps(facts, sort_keys=True), call_id),
+                    )
+                    connection.commit()
+
+                with self.assertRaises(StoredDecisionReplayError):
+                    runtime.begin(proposal(), call_id=call_id)
+
+    def test_replay_binds_changed_strategy_fact_when_reason_is_derivable(self) -> None:
+        first = self.runtime.begin(proposal(), call_id="first-low-progress")
+        self.runtime.complete(first, progress="low_progress")
+        candidate = replace(proposal(), route="different-agent")
+        second = self.runtime.begin(candidate, call_id="changed-strategy-required")
+        self.assertEqual(second.decision.reason, "changed_strategy_required")
+
+        with closing(sqlite3.connect(self.ledger.sqlite_path)) as connection:
+            row = connection.execute(
+                """
+                SELECT policy_facts_json FROM call_events
+                WHERE call_id = 'changed-strategy-required'
+                  AND event_type = 'call.proposed'
+                """
+            ).fetchone()
+            facts = json.loads(row[0])
+            facts["changed_strategy_present"] = True
+            connection.execute(
+                """
+                UPDATE call_events SET policy_facts_json = ?
+                WHERE call_id = 'changed-strategy-required'
+                  AND event_type = 'call.proposed'
+                """,
+                (json.dumps(facts, sort_keys=True),),
+            )
+            connection.commit()
+
+        with self.assertRaises(StoredDecisionReplayError):
+            self.runtime.begin(candidate, call_id="changed-strategy-required")
+
+    def test_atomic_transition_rejects_impossible_mandatory_reason_ordering(self) -> None:
+        candidate = replace(proposal(), mandatory_reason="safety")
+        context = {**policy_context(), "mandatory_reason": "safety"}
+        decision = RuntimeDecision(
+            True,
+            True,
+            "allowed",
+            candidate.fingerprint,
+            5,
+            context,
+            budget_before=6,
+            budget_after=5,
+            decision_latency_ms=0.1,
+        )
+        events = canonical_atomic_events(
+            self.runtime,
+            candidate,
+            "invalid-mandatory-ordering",
+            decision,
+        )
+
+        with self.assertRaisesRegex(ValueError, "mandatory"):
+            self.ledger.atomic_transition(
+                candidate.session_id,
+                "invalid-mandatory-ordering",
+                candidate.fingerprint,
+                lambda _history: (decision, events),
+            )
+        self.assertEqual(self.ledger.events(candidate.session_id), [])
+
+    def test_replay_rejects_noncanonical_terminal_metrics_and_shape(self) -> None:
+        corruptions = (
+            ("completed latency", "completed", "execution_latency_ms = 999"),
+            ("completed progress", "completed", "progress = NULL"),
+            ("completed error", "completed", "error_type = 'RuntimeError'"),
+            ("failed latency", "failed", "execution_latency_ms = 999"),
+            ("failed progress", "failed", "progress = NULL"),
+            ("failed error", "failed", "error_type = NULL"),
+            ("cancelled latency", "cancelled", "execution_latency_ms = 999"),
+            ("cancelled progress", "cancelled", "progress = NULL"),
+            ("cancelled error", "cancelled", "error_type = 'RuntimeError'"),
+        )
+        for index, (label, terminal, assignment) in enumerate(corruptions):
+            with self.subTest(case=label):
+                ledger = CallLedger(
+                    Path(self.tempdir.name) / f"terminal-shape-{index}.sqlite3"
+                )
+                runtime = GovernedRuntime(ledger, mode="observe")
+                call_id = f"terminal-shape-{index}"
+                handle = runtime.begin(proposal(), call_id=call_id)
+                if terminal == "completed":
+                    runtime.complete(handle)
+                elif terminal == "failed":
+                    runtime.fail(handle, RuntimeError("private failure"))
+                else:
+                    runtime.cancel(handle)
+                with closing(sqlite3.connect(ledger.sqlite_path)) as connection:
+                    connection.execute(
+                        f"UPDATE call_events SET {assignment} "
+                        "WHERE call_id = ? AND event_type = ?",
+                        (call_id, f"call.{terminal}"),
+                    )
+                    connection.commit()
+
+                with self.assertRaises(StoredDecisionReplayError):
+                    runtime.begin(proposal(), call_id=call_id)
+
+    def test_replay_accepts_unmeasured_host_terminal(self) -> None:
+        candidate = proposal()
+        handle = self.runtime.begin(candidate, call_id="host-terminal")
+        self.ledger.append(
+            self.runtime._event(
+                candidate,
+                "host-terminal",
+                handle.decision,
+                "completed",
+                event_type="call.completed",
+                progress="unknown",
+                source="codex",
+                metadata={},
+            )
+        )
+
+        replayed = self.runtime.begin(candidate, call_id="host-terminal")
+        terminal = self.ledger.events(candidate.session_id)[-1]
+        self.assertEqual(replayed.decision, handle.decision)
+        self.assertIsNone(terminal.duration_ms)
+        self.assertIsNone(terminal.execution_latency_ms)
+
+    def test_same_call_replays_after_stale_reservation_recovery(self) -> None:
+        candidate = proposal()
+        first = self.runtime.begin(candidate, call_id="stale-call")
+        recovered = self.ledger.recover_stale_reservations(
+            candidate.trace_id,
+            1,
+            now=datetime(2100, 1, 1, tzinfo=timezone.utc),
+        )
+        self.assertEqual(recovered, 1)
+
+        replayed = self.runtime.begin(candidate, call_id="stale-call")
+        terminal = self.ledger.events(candidate.session_id)[-1]
+        self.assertEqual(replayed.decision, first.decision)
+        self.assertEqual(terminal.source_event, "stale_reservation_recovered")
+        self.assertEqual(terminal.progress, "unknown")
+        self.assertIsNone(terminal.duration_ms)
+        self.assertIsNone(terminal.execution_latency_ms)
+
+    def test_policy_fact_budget_relation_accepts_default_and_explicit_limits(self) -> None:
+        cases = (
+            (None, 6, False),
+            (3, 6, True),
+            (9, 9, False),
+        )
+        for index, (requested, effective, floor_applied) in enumerate(cases):
+            with self.subTest(requested=requested):
+                ledger = CallLedger(
+                    Path(self.tempdir.name) / f"budget-relation-{index}.sqlite3"
+                )
+                runtime = GovernedRuntime(ledger, mode="observe")
+                candidate = replace(proposal(), budget_limit=requested)
+                handle = runtime.begin(candidate, call_id=f"budget-relation-{index}")
+                self.assertEqual(handle.decision.context["effective_limit"], effective)
+                self.assertEqual(
+                    handle.decision.context["budget_floor_applied"],
+                    floor_applied,
+                )
 
     def test_terminal_metadata_cannot_repeat_or_inject_policy_context(self) -> None:
         handle = self.runtime.begin(proposal(), call_id="host-call-ref")
