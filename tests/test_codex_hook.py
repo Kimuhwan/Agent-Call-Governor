@@ -188,6 +188,7 @@ class CodexHookTests(unittest.TestCase):
         self.assertEqual(history, [
             {
                 "fingerprint": self.ledger.events(scope_id("turn-2"))[0].fingerprint,
+                "fingerprint_version": 2,
                 "budget_kind": "agent",
                 "progress": "material_progress",
             }

@@ -1,10 +1,13 @@
+import copy
 import hashlib
 import inspect
 import json
+import sqlite3
 import sys
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 
@@ -82,6 +85,7 @@ class RuntimeLedgerTests(unittest.TestCase):
         event = self.event("started")
 
         self.assertEqual(event.schema_version, 2)
+        self.assertEqual(event.fingerprint_version, 2)
         self.assertEqual(event.event_type, "call.started")
         self.assertEqual(event.observed_at, event.occurred_at)
         self.assertEqual(event.trace_id, event.session_id)
@@ -210,6 +214,13 @@ class RuntimeLedgerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, field):
                     self.event("proposed", **{field: value})
 
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            self.event(
+                "proposed",
+                fingerprint="b" * 64,
+                fingerprint_version=2,
+            )
+
     def test_tampered_canonical_fields_cannot_be_exported_or_persisted(self):
         invalid_values = {
             "fingerprint": "not-a-digest",
@@ -233,6 +244,105 @@ class RuntimeLedgerTests(unittest.TestCase):
                             self.ledger.append(event)
 
         self.assertEqual(self.ledger.events(), [])
+
+    def test_decision_fields_require_exact_canonical_types_at_construction(self):
+        invalid_values = {
+            "policy_allowed": (0, 1, "true", 2),
+            "execution_allowed": (0, 1, "false", -1),
+            "decision_reason": ("", "   ", 0, 1, 3.5, False),
+        }
+        for field, values in invalid_values.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    with self.assertRaisesRegex(ValueError, field):
+                        self.event("proposed", **{field: value})
+
+        event = self.event(
+            "proposed",
+            policy_allowed=None,
+            execution_allowed=None,
+            decision_reason=None,
+        )
+        self.assertIsNone(event.policy_allowed)
+        self.assertIsNone(event.execution_allowed)
+        self.assertIsNone(event.decision_reason)
+
+    def test_tampered_decision_fields_cannot_cross_any_output_boundary(self):
+        invalid_values = {
+            "policy_allowed": 1,
+            "execution_allowed": 0,
+            "decision_reason": 42,
+        }
+        for field, value in invalid_values.items():
+            for boundary in ("export", "sqlite", "jsonl"):
+                with self.subTest(field=field, value=value, boundary=boundary):
+                    root = self.root / f"{field}-{boundary}"
+                    ledger = CallLedger(root / "events.sqlite3", root / "events.jsonl")
+                    event = self.event(
+                        "proposed",
+                        call_id=f"{field}-{boundary}",
+                    )
+                    object.__setattr__(event, field, value)
+
+                    with self.assertRaisesRegex(ValueError, field):
+                        if boundary == "export":
+                            event.to_dict()
+                        elif boundary == "sqlite":
+                            ledger.append(event)
+                        else:
+                            ledger._append_jsonl((event,))
+
+                    with closing(sqlite3.connect(root / "events.sqlite3")) as connection:
+                        self.assertEqual(
+                            connection.execute("SELECT COUNT(*) FROM call_events").fetchone()[0],
+                            0,
+                        )
+                    jsonl_path = root / "events.jsonl"
+                    self.assertFalse(jsonl_path.exists() and jsonl_path.read_bytes())
+
+    def test_tampered_schema_coercions_cannot_be_exported(self):
+        invalid_values = {
+            "event_id": 1,
+            "parent_call_id": 1,
+            "occurred_at": 1,
+            "objective": "plaintext objective",
+            "event_type": 1,
+            "turn_id": 1,
+            "fingerprint_version": True,
+            "failure_policy": 1,
+            "reason_code": 1,
+            "budget_before": True,
+            "decision_latency_ms": True,
+            "progress": 1,
+            "estimated_cost_usd": float("inf"),
+            "pricing_version": 1,
+            "error_type": 1,
+        }
+        for field, value in invalid_values.items():
+            with self.subTest(field=field, value=value):
+                event = self.event("proposed")
+                object.__setattr__(event, field, value)
+                with self.assertRaisesRegex(ValueError, field):
+                    event.to_dict()
+
+    def test_sqlite_and_jsonl_round_trip_preserve_decision_representation(self):
+        event = self.event(
+            "proposed",
+            policy_allowed=True,
+            execution_allowed=False,
+            decision_reason="policy allowed in observe mode",
+        )
+
+        self.ledger.append(event)
+
+        sqlite_value = self.ledger.events()[0].to_dict()
+        jsonl_value = json.loads(self.jsonl_path.read_text(encoding="utf-8"))
+        self.assertEqual(sqlite_value, event.to_dict())
+        self.assertEqual(jsonl_value, event.to_dict())
+        self.assertIs(sqlite_value["policy_allowed"], True)
+        self.assertIs(sqlite_value["execution_allowed"], False)
+        self.assertIs(jsonl_value["policy_allowed"], True)
+        self.assertIs(jsonl_value["execution_allowed"], False)
 
     def test_legacy_schema_version_is_upgraded_before_export_and_persistence(self):
         event = self.event("started", schema_version=1)
@@ -305,6 +415,7 @@ class RuntimeLedgerTests(unittest.TestCase):
         self.assertEqual(event.span_id, event.call_id)
         self.assertEqual(event.parent_span_id, event.parent_call_id)
         self.assertEqual(event.source_event, event.source)
+        self.assertEqual(event.fingerprint_version, 1)
         self.assertIs(event.policy_allowed, True)
         self.assertIs(event.execution_allowed, False)
         self.assertEqual(event.decision_reason, "legacy decision")
@@ -312,6 +423,165 @@ class RuntimeLedgerTests(unittest.TestCase):
 
         self.ledger.append(event)
         self.assertEqual(self.ledger.events()[0], event)
+
+    def test_public_v02_positional_constructor_infers_bare_fingerprint_version(self):
+        legacy_fingerprint = "b" * 64
+        try:
+            event = CallEvent(
+                "legacy-event",
+                "legacy-session",
+                "legacy-call",
+                "completed",
+                "2026-07-14T00:00:00Z",
+                "Legacy positional objective",
+                "Bash",
+                legacy_fingerprint,
+                "direct-tool",
+                "balanced",
+                "medium",
+                "observe",
+                True,
+                False,
+                "legacy decision",
+                "material_progress",
+                None,
+                1.25,
+                "legacy-runtime",
+                {},
+                None,
+                1,
+            )
+        except ValueError as exc:
+            self.fail(f"released-v0.2 positional event was rejected: {exc}")
+
+        self.assertEqual(event.schema_version, 2)
+        self.assertEqual(event.fingerprint, legacy_fingerprint)
+        self.assertEqual(event.fingerprint_version, 1)
+        self.assertEqual(event.to_dict()["fingerprint_version"], 1)
+
+    def test_sanitized_metadata_is_detached_copyable_and_json_safe(self):
+        custom_key = "custom:" + "a" * 64
+        source_metadata = {
+            "exit_code": 0,
+            custom_key: {"details": ["original-secret"]},
+        }
+        event = self.event(
+            "started",
+            metadata=source_metadata,
+            policy_facts=policy_facts(),
+        )
+        initial_metadata = event.to_dict()["safe_metadata_json"]
+        initial_json = json.dumps(initial_metadata, sort_keys=True)
+
+        source_metadata["exit_code"] = 99
+        source_metadata[custom_key]["details"].append("later-secret")
+
+        self.assertEqual(json.dumps(event.metadata, sort_keys=True), initial_json)
+        self.assertEqual(event.metadata["exit_code"], 0)
+
+        copied = copy.deepcopy(event)
+        self.assertEqual(copied, event)
+        self.assertEqual(copied.to_dict(), event.to_dict())
+        self.assertIsNot(copied.metadata, event.metadata)
+        self.assertIsNot(copied.policy_facts, event.policy_facts)
+        with self.assertRaises(TypeError):
+            copied.policy_facts["risk"] = "low"
+        copied.metadata["exit_code"] = 7
+        self.assertEqual(event.metadata["exit_code"], 0)
+
+        raw_key = "raw_prompt"
+        canary = "MUTABLE-METADATA-CANARY-must-not-survive"
+        event.metadata[raw_key] = canary
+        nested = event.metadata[custom_key]
+        nested_key = next(iter(nested))
+        nested[nested_key].append(canary)
+
+        self.assertIn(raw_key, event.metadata)
+        direct_export = json.dumps(event.to_dict(), sort_keys=True)
+        self.assertNotIn(raw_key, direct_export)
+        self.assertNotIn(canary, direct_export)
+
+    def test_mutable_and_object_setattr_metadata_tampering_is_resanitized_everywhere(self):
+        mutable_event = self.event("started", call_id="mutable")
+        mutable_key = "raw_prompt_mutable"
+        mutable_canary = "MUTABLE-BOUNDARY-CANARY-must-not-survive"
+        mutable_event.metadata[mutable_key] = mutable_canary
+
+        bypassed_event = self.event("started", call_id="bypassed")
+        bypassed_key = "raw_prompt_bypassed"
+        bypassed_canary = "BYPASSED-BOUNDARY-CANARY-must-not-survive"
+        object.__setattr__(
+            bypassed_event,
+            "metadata",
+            {bypassed_key: bypassed_canary},
+        )
+
+        encoded = "\n".join(
+            json.dumps(event.to_dict(), sort_keys=True)
+            for event in (mutable_event, bypassed_event)
+        )
+        self.ledger.append(mutable_event)
+        self.ledger.append(bypassed_event)
+        with closing(sqlite3.connect(self.db_path)) as connection:
+            sqlite_metadata = "\n".join(
+                str(value)
+                for row in connection.execute(
+                    "SELECT metadata_json, safe_metadata_json FROM call_events"
+                )
+                for value in row
+            )
+        jsonl = self.jsonl_path.read_text(encoding="utf-8")
+
+        for boundary, representation in {
+            "direct": encoded,
+            "sqlite": sqlite_metadata,
+            "jsonl": jsonl,
+        }.items():
+            with self.subTest(boundary=boundary):
+                self.assertNotIn(mutable_key, representation)
+                self.assertNotIn(mutable_canary, representation)
+                self.assertNotIn(bypassed_key, representation)
+                self.assertNotIn(bypassed_canary, representation)
+
+    def test_non_json_metadata_tampering_is_rejected_without_partial_writes(self):
+        event = self.event("started")
+        object.__setattr__(event, "metadata", {"raw_prompt": object()})
+
+        with self.assertRaisesRegex(ValueError, "metadata must be JSON-compatible"):
+            event.to_dict()
+        with self.assertRaisesRegex(ValueError, "metadata must be JSON-compatible"):
+            self.ledger.append(event)
+
+        self.assertEqual(self.ledger.events(), [])
+        self.assertFalse(self.jsonl_path.exists())
+
+    def test_history_rejects_storage_type_coercions(self):
+        invalid_values = {
+            "fingerprint": sqlite3.Binary(b"not-a-fingerprint"),
+            "budget_kind": sqlite3.Binary(b"agent"),
+            "fingerprint_version": "bogus-version",
+            "progress": sqlite3.Binary(b"sufficient"),
+        }
+        for field, value in invalid_values.items():
+            with self.subTest(field=field):
+                root = self.root / f"history-{field}"
+                ledger = CallLedger(root / "events.sqlite3")
+                ledger.append(
+                    self.event(
+                        "completed",
+                        call_id=f"history-{field}",
+                        progress="sufficient",
+                    )
+                )
+                with closing(sqlite3.connect(root / "events.sqlite3")) as connection:
+                    connection.execute(
+                        f'UPDATE call_events SET "{field}" = ?',
+                        (value,),
+                    )
+                    connection.commit()
+
+                with self.assertRaisesRegex(ValueError, field):
+                    ledger.history("session-1")
 
     def test_started_call_counts_once_and_blocked_call_does_not(self):
         self.ledger.append(
@@ -334,6 +604,7 @@ class RuntimeLedgerTests(unittest.TestCase):
             [
                 {
                     "fingerprint": digest_reference("fp-real"),
+                    "fingerprint_version": 2,
                     "progress": "sufficient",
                     "budget_kind": "agent",
                 }
@@ -354,7 +625,13 @@ class RuntimeLedgerTests(unittest.TestCase):
 
         self.assertEqual(
             self.ledger.history("session-1"),
-            [{"fingerprint": digest_reference("fp-1"), "budget_kind": "agent"}],
+            [
+                {
+                    "fingerprint": digest_reference("fp-1"),
+                    "fingerprint_version": 2,
+                    "budget_kind": "agent",
+                }
+            ],
         )
 
     def test_explicit_fingerprint_version_is_exposed_in_history(self):

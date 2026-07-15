@@ -18,6 +18,7 @@ from agent_call_governor_runtime.ledger import (
     SCHEMA_VERSION,
     UnsupportedLegacySchemaError,
     UnsupportedSchemaVersionError,
+    _MIGRATION_CLEANUP_PENDING,
 )
 
 
@@ -99,6 +100,25 @@ def create_legacy_schema(
         connection.executescript(indexes_sql)
     connection.commit()
     return connection
+
+
+def inject_sqlite_hidden_delete_trigger(path: Path) -> None:
+    """Install the exact writable_schema trigger used by the reviewer reproduction."""
+    with closing(sqlite3.connect(path)) as connection:
+        trigger_sql = (
+            "CREATE TRIGGER sqlite_hidden AFTER UPDATE ON call_events "
+            "BEGIN DELETE FROM call_events; END"
+        )
+        connection.execute("PRAGMA writable_schema = ON")
+        connection.execute(
+            "INSERT INTO sqlite_schema(type, name, tbl_name, rootpage, sql) "
+            "VALUES ('trigger', 'sqlite_hidden', 'call_events', 0, ?)",
+            (trigger_sql,),
+        )
+        schema_cookie = connection.execute("PRAGMA schema_version").fetchone()[0]
+        connection.execute(f"PRAGMA schema_version = {schema_cookie + 1}")
+        connection.execute("PRAGMA writable_schema = OFF")
+        connection.commit()
 
 
 class SchemaMigrationTests(unittest.TestCase):
@@ -292,6 +312,87 @@ class SchemaMigrationTests(unittest.TestCase):
                 ):
                     CallLedger(path)
 
+    def test_sqlite_prefixed_trigger_is_rejected_before_any_legacy_or_v2_mutation(self) -> None:
+        cases = {
+            "legacy": (
+                UnsupportedLegacySchemaError,
+                lambda path: create_v02_database(path),
+            ),
+            "v2": (
+                UnsupportedSchemaVersionError,
+                lambda path: (create_v02_database(path), CallLedger(path)),
+            ),
+        }
+        for state, (error_type, prepare) in cases.items():
+            with self.subTest(schema_state=state):
+                path = self.path.with_name(f"sqlite-hidden-{state}.sqlite3")
+                prepare(path)
+                inject_sqlite_hidden_delete_trigger(path)
+                database_bytes_before = path.read_bytes()
+                with closing(sqlite3.connect(path)) as connection:
+                    row_before = tuple(connection.execute("SELECT * FROM call_events"))[0]
+                    user_version_before = connection.execute("PRAGMA user_version").fetchone()[0]
+                    application_id_before = connection.execute("PRAGMA application_id").fetchone()[0]
+                    journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
+
+                with self.assertRaisesRegex(error_type, "schema objects"):
+                    CallLedger(path)
+
+                self.assertEqual(path.read_bytes(), database_bytes_before)
+                with closing(sqlite3.connect(path)) as connection:
+                    self.assertEqual(tuple(connection.execute("SELECT * FROM call_events"))[0], row_before)
+                    self.assertEqual(
+                        connection.execute("SELECT COUNT(*) FROM call_events").fetchone()[0],
+                        1,
+                    )
+                    self.assertEqual(
+                        connection.execute("PRAGMA user_version").fetchone()[0],
+                        user_version_before,
+                    )
+                    self.assertEqual(
+                        connection.execute("PRAGMA application_id").fetchone()[0],
+                        application_id_before,
+                    )
+                    self.assertEqual(
+                        connection.execute("PRAGMA journal_mode").fetchone()[0],
+                        journal_mode_before,
+                    )
+
+    def test_sqlite_sequence_definition_is_verified_before_migration(self) -> None:
+        create_v02_database(self.path)
+        with closing(sqlite3.connect(self.path)) as connection:
+            sequence_sql = connection.execute(
+                "SELECT sql FROM sqlite_schema "
+                "WHERE type = 'table' AND name = 'sqlite_sequence'"
+            ).fetchone()[0]
+            tampered_sql = sequence_sql.replace("name,seq", "name,seq,unexpected")
+            self.assertNotEqual(tampered_sql, sequence_sql)
+            connection.execute("PRAGMA writable_schema = ON")
+            connection.execute(
+                "UPDATE sqlite_schema SET sql = ? "
+                "WHERE type = 'table' AND name = 'sqlite_sequence'",
+                (tampered_sql,),
+            )
+            schema_cookie = connection.execute("PRAGMA schema_version").fetchone()[0]
+            connection.execute(f"PRAGMA schema_version = {schema_cookie + 1}")
+            connection.execute("PRAGMA writable_schema = OFF")
+            connection.commit()
+        database_bytes_before = self.path.read_bytes()
+
+        try:
+            CallLedger(self.path)
+        except UnsupportedLegacySchemaError as exc:
+            self.assertRegex(str(exc), "sqlite_sequence")
+        except Exception as exc:
+            self.fail(f"sqlite_sequence was not rejected during admission: {exc}")
+        else:
+            self.fail("sqlite_sequence was not rejected during admission")
+
+        self.assertEqual(self.path.read_bytes(), database_bytes_before)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM call_events").fetchone()[0], 1)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+
     def test_legacy_extra_table_constraints_are_rejected(self) -> None:
         cases = {
             "check": LEGACY_COLUMNS.replace(
@@ -443,6 +544,158 @@ class SchemaMigrationTests(unittest.TestCase):
 
         reopened = CallLedger(self.path)
         self.assertEqual(reopened.events()[0].fingerprint_version, 1)
+
+    def test_every_invalid_released_v02_row_is_rejected_without_mutation(self) -> None:
+        invalid_cases = (
+            ("seq", 0),
+            ("event_id", ""),
+            ("event_id", " event-1 "),
+            ("schema_version", 0),
+            ("schema_version", "not-an-integer"),
+            ("session_id", ""),
+            ("session_id", " session-ref "),
+            ("call_id", ""),
+            ("call_id", " call-ref "),
+            ("parent_call_id", ""),
+            ("parent_call_id", " parent-ref "),
+            ("phase", "unknown"),
+            ("occurred_at", ""),
+            ("occurred_at", " 2026-07-13T00:00:00Z "),
+            ("objective", "private plaintext objective"),
+            ("route", ""),
+            ("route", " Bash "),
+            ("fingerprint", "not-a-digest"),
+            ("fingerprint", " sha256:" + "b" * 64 + " "),
+            ("budget_kind", "bogus-budget"),
+            ("profile", "bogus-profile"),
+            ("quality_risk", "extreme"),
+            ("mode", "bogus-mode"),
+            ("policy_allowed", 2),
+            ("policy_allowed", "true"),
+            ("execution_allowed", -1),
+            ("execution_allowed", "false"),
+            ("decision_reason", ""),
+            ("decision_reason", " allowed "),
+            ("progress", "bogus-progress"),
+            ("duration_ms", -1),
+            ("duration_ms", float("inf")),
+            ("source", ""),
+            ("source", " runtime "),
+            ("metadata_json", "{not-json"),
+            ("metadata_json", json.dumps(["not", "an", "object"])),
+            ("error_type", ""),
+            ("error_type", " LegacyError "),
+        )
+        for index, (field, value) in enumerate(invalid_cases):
+            with self.subTest(field=field, value=value):
+                path = self.path.with_name(f"invalid-row-{index}.sqlite3")
+                create_v02_database(path)
+                with closing(sqlite3.connect(path)) as connection:
+                    connection.execute(f'UPDATE call_events SET "{field}" = ?', (value,))
+                    connection.commit()
+                    journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                database_bytes_before = path.read_bytes()
+
+                with self.assertRaisesRegex(
+                    (ValueError, UnsupportedLegacySchemaError),
+                    "legacy",
+                ):
+                    CallLedger(path)
+
+                self.assertEqual(path.read_bytes(), database_bytes_before)
+                with closing(sqlite3.connect(path)) as connection:
+                    self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                    self.assertEqual(connection.execute("PRAGMA application_id").fetchone()[0], 0)
+                    self.assertEqual(
+                        connection.execute("PRAGMA journal_mode").fetchone()[0],
+                        journal_mode_before,
+                    )
+                    self.assertEqual(connection.execute("SELECT COUNT(*) FROM call_events").fetchone()[0], 1)
+
+    def test_released_v02_positive_schema_version_and_null_optionals_remain_compatible(self) -> None:
+        create_v02_database(self.path)
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute(
+                "UPDATE call_events SET schema_version = 7, parent_call_id = NULL, "
+                "policy_allowed = NULL, execution_allowed = NULL, decision_reason = NULL, "
+                "progress = NULL, duration_ms = NULL, error_type = NULL"
+            )
+            connection.commit()
+
+        event = CallLedger(self.path).events()[0]
+
+        self.assertEqual(event.schema_version, SCHEMA_VERSION)
+        self.assertIsNone(event.policy_allowed)
+        self.assertIsNone(event.execution_allowed)
+        self.assertIsNone(event.decision_reason)
+
+    def test_released_v02_bare_fingerprint_is_preserved_as_legacy_v1(self) -> None:
+        legacy_fingerprint = "b" * 64
+        create_v02_database(self.path)
+        with closing(sqlite3.connect(self.path)) as connection:
+            connection.execute(
+                "UPDATE call_events SET fingerprint = ?",
+                (legacy_fingerprint,),
+            )
+            connection.commit()
+
+        try:
+            event = CallLedger(self.path).events()[0]
+        except ValueError as exc:
+            self.fail(f"valid released-v0.2 fingerprint was rejected: {exc}")
+
+        self.assertEqual(event.fingerprint, legacy_fingerprint)
+        self.assertEqual(event.fingerprint_version, 1)
+        with closing(sqlite3.connect(self.path)) as connection:
+            self.assertEqual(
+                connection.execute("SELECT fingerprint FROM call_events").fetchone()[0],
+                legacy_fingerprint,
+            )
+        event_schema = json.loads(
+            (ROOT / "schemas" / "event-v2.schema.json").read_text(encoding="utf-8")
+        )
+        Draft202012Validator(event_schema).validate(event.to_dict())
+
+    def test_foreign_and_misplaced_application_ids_are_rejected_without_mutation(self) -> None:
+        foreign_id = 0x12345678
+        cases = (
+            ("fresh-foreign", "fresh", foreign_id),
+            ("fresh-marker", "fresh", _MIGRATION_CLEANUP_PENDING),
+            ("legacy-foreign", "legacy", foreign_id),
+            ("legacy-marker", "legacy", _MIGRATION_CLEANUP_PENDING),
+            ("v2-foreign", "v2", foreign_id),
+        )
+        for name, state, application_id in cases:
+            with self.subTest(case=name):
+                path = self.path.with_name(f"application-id-{name}.sqlite3")
+                if state == "legacy":
+                    create_v02_database(path)
+                elif state == "v2":
+                    CallLedger(path)
+                with closing(sqlite3.connect(path)) as connection:
+                    connection.execute(f"PRAGMA application_id = {application_id}")
+                    connection.commit()
+                    user_version_before = connection.execute("PRAGMA user_version").fetchone()[0]
+                    journal_mode_before = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                database_bytes_before = path.read_bytes()
+
+                with self.assertRaisesRegex(RuntimeError, "application_id"):
+                    CallLedger(path)
+
+                self.assertEqual(path.read_bytes(), database_bytes_before)
+                with closing(sqlite3.connect(path)) as connection:
+                    self.assertEqual(
+                        connection.execute("PRAGMA application_id").fetchone()[0],
+                        application_id,
+                    )
+                    self.assertEqual(
+                        connection.execute("PRAGMA user_version").fetchone()[0],
+                        user_version_before,
+                    )
+                    self.assertEqual(
+                        connection.execute("PRAGMA journal_mode").fetchone()[0],
+                        journal_mode_before,
+                    )
 
     def test_migration_truncates_legacy_wal_and_vacuums_free_pages(self) -> None:
         wal_canary = "WAL-PRIVACY-CANARY-must-not-survive"
@@ -596,6 +849,11 @@ class SchemaMigrationTests(unittest.TestCase):
                 unsafe["raw_input_stored"] = True
                 with self.assertRaises(ValidationError):
                     validator.validate(unsafe)
+
+                current_bare_fingerprint = event.to_dict()
+                current_bare_fingerprint["fingerprint"] = "b" * 64
+                with self.assertRaises(ValidationError):
+                    validator.validate(current_bare_fingerprint)
 
         legacy_facts = dict(facts, fingerprint_version=1)
         with self.assertRaises(ValidationError):

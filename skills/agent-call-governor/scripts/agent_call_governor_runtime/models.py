@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
 import time
 import uuid
-from dataclasses import KW_ONLY, dataclass, field
+from dataclasses import KW_ONLY, dataclass, field, fields
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
@@ -127,6 +128,20 @@ def _is_sha256_reference(value: Any) -> bool:
     )
 
 
+def _is_bare_sha256_digest(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _is_event_fingerprint(value: Any, fingerprint_version: Any) -> bool:
+    return _is_sha256_reference(value) or (
+        fingerprint_version == 1 and _is_bare_sha256_digest(value)
+    )
+
+
 def _validate_policy_facts(value: dict[str, Any]) -> dict[str, Any]:
     if set(value) != _POLICY_FACT_FIELDS:
         raise ValueError("policy_facts must contain exactly the approved privacy-safe fields")
@@ -182,20 +197,110 @@ def _policy_facts_copy(value: Mapping[str, Any] | None) -> dict[str, Any] | None
     return _validate_policy_facts(_json_object(value, "policy_facts"))
 
 
+def _optional_boolean(value: Any, field_name: str) -> bool | None:
+    if value is not None and type(value) is not bool:
+        raise ValueError(f"{field_name} must be a boolean or null")
+    return value
+
+
+def _sanitized_event_metadata(event: "CallEvent") -> dict[str, Any]:
+    return sanitize_metadata(
+        _json_object(event.metadata, "metadata"),
+        source=event.source,
+    )
+
+
 def _validate_event_boundary(event: "CallEvent") -> dict[str, Any] | None:
-    """Revalidate canonical and privacy-sensitive fields at an output boundary."""
-    if event.schema_version != 2:
+    """Revalidate every event-v2 field at an output boundary without coercion."""
+    if type(event.schema_version) is not int or event.schema_version != 2:
         raise ValueError("schema_version must be 2 at canonical boundaries")
-    if not _is_sha256_reference(event.fingerprint):
-        raise ValueError("fingerprint must be a SHA-256 reference")
+    for name in (
+        "event_id",
+        "session_id",
+        "call_id",
+        "occurred_at",
+        "route",
+        "source",
+        "observed_at",
+        "trace_id",
+        "span_id",
+        "source_event",
+    ):
+        _nonempty(getattr(event, name), name)
+    for name in (
+        "parent_call_id",
+        "turn_id",
+        "parent_span_id",
+        "agent_id",
+        "tool_name",
+        "reason_code",
+        "decision_reason",
+        "policy_version",
+        "pricing_version",
+        "error_type",
+    ):
+        value = getattr(event, name)
+        if value is not None:
+            _nonempty(value, name)
+    if not _is_sha256_reference(event.objective):
+        raise ValueError("objective must be a SHA-256 reference")
+    if not _is_event_fingerprint(event.fingerprint, event.fingerprint_version):
+        raise ValueError(
+            "fingerprint must be a SHA-256 reference; legacy v1 may use a bare digest"
+        )
     if event.input_digest is not None and not _is_sha256_reference(event.input_digest):
         raise ValueError("input_digest must be null or a SHA-256 reference")
+    _choice(event.phase, EVENT_PHASES, "phase")
+    _choice(event.event_type, EVENT_TYPES, "event_type")
+    _choice(event.budget_kind, BUDGET_KINDS, "budget_kind")
+    _choice(event.profile, PROFILE_NAMES, "profile")
+    _choice(event.quality_risk, RISK_VALUES, "quality_risk")
+    _choice(event.mode, RUNTIME_MODES, "mode")
+    _choice(event.failure_policy, EVENT_FAILURE_POLICIES, "failure_policy")
+    if event.progress is not None:
+        _choice(event.progress, PROGRESS_VALUES, "progress")
     if event.decision is not None:
         _choice(event.decision, DECISION_VALUES, "decision")
     if event.status is not None:
         _choice(event.status, STATUS_VALUES, "status")
+    _optional_boolean(event.policy_allowed, "policy_allowed")
+    _optional_boolean(event.execution_allowed, "execution_allowed")
+    if event.fingerprint_version is not None and (
+        type(event.fingerprint_version) is not int
+        or event.fingerprint_version not in {1, FINGERPRINT_VERSION}
+    ):
+        raise ValueError(
+            f"fingerprint_version must be null, 1, or {FINGERPRINT_VERSION}"
+        )
+    for name in (
+        "budget_before",
+        "budget_after",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+    ):
+        value = getattr(event, name)
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"{name} must be a non-negative integer")
+    for name in (
+        "duration_ms",
+        "decision_latency_ms",
+        "execution_latency_ms",
+        "estimated_cost_usd",
+    ):
+        value = getattr(event, name)
+        if value is not None and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(f"{name} must be a non-negative finite number")
+    if event.estimated_cost_usd is not None and event.pricing_version is None:
+        raise ValueError("pricing_version is required when estimated_cost_usd is set")
     if event.raw_input_stored is not False:
         raise ValueError("raw_input_stored must be false")
+    _json_object(event.metadata, "metadata")
     return _policy_facts_copy(event.policy_facts)
 
 
@@ -379,6 +484,13 @@ class CallEvent:
     policy_facts: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        input_schema_version = self.schema_version
+        if (
+            self.fingerprint_version is None
+            and type(input_schema_version) is int
+            and input_schema_version == 1
+        ):
+            object.__setattr__(self, "fingerprint_version", 1)
         for name in (
             "event_id",
             "session_id",
@@ -390,8 +502,10 @@ class CallEvent:
             "source",
         ):
             object.__setattr__(self, name, _nonempty(getattr(self, name), name))
-        if not _is_sha256_reference(self.fingerprint):
-            raise ValueError("fingerprint must be a SHA-256 reference")
+        if not _is_event_fingerprint(self.fingerprint, self.fingerprint_version):
+            raise ValueError(
+                "fingerprint must be a SHA-256 reference; legacy v1 may use a bare digest"
+            )
         object.__setattr__(self, "objective", _objective_reference(self.objective))
         object.__setattr__(self, "phase", _choice(self.phase, EVENT_PHASES, "phase"))
         canonical_defaults = {
@@ -419,6 +533,12 @@ class CallEvent:
         )
         if self.progress is not None:
             object.__setattr__(self, "progress", _choice(self.progress, PROGRESS_VALUES, "progress"))
+        for name in ("policy_allowed", "execution_allowed"):
+            object.__setattr__(
+                self,
+                name,
+                _optional_boolean(getattr(self, name), name),
+            )
         for name in (
             "parent_call_id",
             "turn_id",
@@ -427,6 +547,7 @@ class CallEvent:
             "tool_name",
             "input_digest",
             "reason_code",
+            "decision_reason",
             "policy_version",
             "pricing_version",
             "error_type",
@@ -494,12 +615,33 @@ class CallEvent:
             None if policy_facts is None else MappingProxyType(policy_facts),
         )
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> "CallEvent":
+        """Copy every current field while rebuilding validated immutable facts."""
+        existing = memo.get(id(self))
+        if existing is not None:
+            return existing
+        copied = object.__new__(type(self))
+        memo[id(self)] = copied
+        for model_field in fields(self):
+            value = getattr(self, model_field.name)
+            if model_field.name == "policy_facts" and value is not None:
+                facts = _policy_facts_copy(copy.deepcopy(dict(value), memo))
+                copied_value = MappingProxyType(facts)
+            else:
+                copied_value = copy.deepcopy(value, memo)
+            object.__setattr__(copied, model_field.name, copied_value)
+        return copied
+
     @classmethod
     def create(cls, **values: Any) -> "CallEvent":
         resolved = dict(values)
         resolved["event_id"] = resolved.get("event_id", str(uuid.uuid4()))
         resolved["occurred_at"] = resolved.get("occurred_at", utc_now())
         resolved.setdefault("schema_version", 2)
+        if "fingerprint_version" not in resolved:
+            resolved["fingerprint_version"] = (
+                1 if resolved["schema_version"] == 1 else FINGERPRINT_VERSION
+            )
         return cls(**resolved)
 
     def to_dict(self) -> dict[str, Any]:
@@ -532,7 +674,7 @@ class CallEvent:
             "progress": self.progress,
             "duration_ms": self.duration_ms,
             "source": self.source,
-            "safe_metadata_json": dict(self.metadata),
+            "safe_metadata_json": _sanitized_event_metadata(self),
             "error_type": self.error_type,
             "agent_id": self.agent_id,
             "tool_name": self.tool_name,

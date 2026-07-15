@@ -197,8 +197,7 @@
       "minLength": 1
     },
     "fingerprint": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
+      "type": "string"
     },
     "budget_kind": {
       "enum": ["agent", "direct-tool"]
@@ -339,6 +338,33 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": ["fingerprint_version"],
+        "properties": {
+          "fingerprint_version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "fingerprint": {
+            "oneOf": [
+              {"pattern": "^[0-9a-f]{64}$"},
+              {"pattern": "^sha256:[0-9a-f]{64}$"}
+            ]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "fingerprint": {
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
     {
       "if": {
         "required": ["estimated_cost_usd"],
