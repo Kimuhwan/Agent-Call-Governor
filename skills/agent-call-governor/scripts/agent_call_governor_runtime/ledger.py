@@ -15,8 +15,88 @@ from .models import CallEvent
 from .redaction import sanitize_metadata
 
 
+SCHEMA_VERSION = 2
+_MIGRATION_CLEANUP_PENDING = 0x41434732  # ASCII "ACG2"
 _COUNTED_PHASES = ("started", "completed", "failed")
+_LEGACY_EVENT_TYPES = {
+    "proposed": "call.proposed",
+    "blocked": "call.blocked",
+    "started": "call.started",
+    "completed": "call.completed",
+    "failed": "call.failed",
+    "cancelled": "call.cancelled",
+}
+_LEGACY_V02_COLUMNS = (
+    ("seq", "INTEGER", 0, None, 1),
+    ("event_id", "TEXT", 1, None, 0),
+    ("schema_version", "INTEGER", 1, None, 0),
+    ("session_id", "TEXT", 1, None, 0),
+    ("call_id", "TEXT", 1, None, 0),
+    ("parent_call_id", "TEXT", 0, None, 0),
+    ("phase", "TEXT", 1, None, 0),
+    ("occurred_at", "TEXT", 1, None, 0),
+    ("objective", "TEXT", 1, None, 0),
+    ("route", "TEXT", 1, None, 0),
+    ("fingerprint", "TEXT", 1, None, 0),
+    ("budget_kind", "TEXT", 1, None, 0),
+    ("profile", "TEXT", 1, None, 0),
+    ("quality_risk", "TEXT", 1, None, 0),
+    ("mode", "TEXT", 1, None, 0),
+    ("policy_allowed", "INTEGER", 0, None, 0),
+    ("execution_allowed", "INTEGER", 0, None, 0),
+    ("decision_reason", "TEXT", 0, None, 0),
+    ("progress", "TEXT", 0, None, 0),
+    ("duration_ms", "REAL", 0, None, 0),
+    ("source", "TEXT", 1, None, 0),
+    ("metadata_json", "TEXT", 1, None, 0),
+    ("error_type", "TEXT", 0, None, 0),
+)
+_V2_ADDED_COLUMNS = (
+    ("event_type", "TEXT"),
+    ("observed_at", "TEXT"),
+    ("trace_id", "TEXT"),
+    ("turn_id", "TEXT"),
+    ("span_id", "TEXT"),
+    ("parent_span_id", "TEXT"),
+    ("source_event", "TEXT"),
+    ("agent_id", "TEXT"),
+    ("tool_name", "TEXT"),
+    ("input_digest", "TEXT"),
+    ("fingerprint_version", "INTEGER"),
+    ("failure_policy", "TEXT"),
+    ("decision", "TEXT"),
+    ("reason_code", "TEXT"),
+    ("policy_version", "TEXT"),
+    ("budget_before", "INTEGER"),
+    ("budget_after", "INTEGER"),
+    ("decision_latency_ms", "REAL"),
+    ("execution_latency_ms", "REAL"),
+    ("status", "TEXT"),
+    ("prompt_tokens", "INTEGER"),
+    ("completion_tokens", "INTEGER"),
+    ("total_tokens", "INTEGER"),
+    ("estimated_cost_usd", "REAL"),
+    ("pricing_version", "TEXT"),
+    ("raw_input_stored", "INTEGER"),
+    ("safe_metadata_json", "TEXT"),
+    ("policy_facts_json", "TEXT"),
+)
+_SCHEMA_V2_COLUMNS = _LEGACY_V02_COLUMNS + tuple(
+    (name, column_type, 0, None, 0) for name, column_type in _V2_ADDED_COLUMNS
+)
 T = TypeVar("T")
+
+
+class FutureSchemaError(RuntimeError):
+    """Raised when a database was created by a newer governor."""
+
+
+class UnsupportedLegacySchemaError(RuntimeError):
+    """Raised when user-version zero does not match released v0.2."""
+
+
+class UnsupportedSchemaVersionError(RuntimeError):
+    """Raised when no ordered migration exists for a schema version."""
 
 
 class DuplicateCallIdError(ValueError):
@@ -48,42 +128,214 @@ class CallLedger:
 
     def _initialize(self) -> None:
         with closing(self._connect()) as connection:
-            with connection:
-                connection.execute("PRAGMA journal_mode = WAL")
-                connection.execute("PRAGMA synchronous = NORMAL")
-                connection.executescript(
-                    """
-                CREATE TABLE IF NOT EXISTS call_events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_id TEXT NOT NULL UNIQUE,
-                    schema_version INTEGER NOT NULL,
-                    session_id TEXT NOT NULL,
-                    call_id TEXT NOT NULL,
-                    parent_call_id TEXT,
-                    phase TEXT NOT NULL,
-                    occurred_at TEXT NOT NULL,
-                    objective TEXT NOT NULL,
-                    route TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    budget_kind TEXT NOT NULL,
-                    profile TEXT NOT NULL,
-                    quality_risk TEXT NOT NULL,
-                    mode TEXT NOT NULL,
-                    policy_allowed INTEGER,
-                    execution_allowed INTEGER,
-                    decision_reason TEXT,
-                    progress TEXT,
-                    duration_ms REAL,
-                    source TEXT NOT NULL,
-                    metadata_json TEXT NOT NULL,
-                    error_type TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_call_events_session_call
-                    ON call_events(session_id, call_id, seq);
-                CREATE INDEX IF NOT EXISTS idx_call_events_session_fingerprint
-                    ON call_events(session_id, fingerprint, seq);
-                    """
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = NORMAL")
+            cleanup_pending = False
+            try:
+                connection.execute("BEGIN EXCLUSIVE")
+                user_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+                if user_version > SCHEMA_VERSION:
+                    raise FutureSchemaError(
+                        f"database schema {user_version} requires a newer Agent Call Governor; "
+                        f"supported={SCHEMA_VERSION}"
+                    )
+                if user_version not in {0, SCHEMA_VERSION}:
+                    raise UnsupportedSchemaVersionError(
+                        f"unsupported schema version {user_version}; supported migration is "
+                        "released v0.2 user_version 0 to schema 2"
+                    )
+                if user_version == 0 and not self._table_exists(connection, "call_events"):
+                    self._create_schema_v2(connection)
+                elif user_version == 0:
+                    self._verify_legacy_v02_columns(connection)
+                    connection.execute(
+                        f"PRAGMA application_id = {_MIGRATION_CLEANUP_PENDING}"
+                    )
+                    self._migrate_v02_to_v2(connection)
+                    cleanup_pending = True
+                else:
+                    self._verify_schema_v2(connection)
+                    cleanup_pending = (
+                        int(connection.execute("PRAGMA application_id").fetchone()[0])
+                        == _MIGRATION_CLEANUP_PENDING
+                    )
+                connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+
+            if cleanup_pending:
+                self._cleanup_migrated_storage(connection)
+                try:
+                    connection.execute("BEGIN EXCLUSIVE")
+                    if (
+                        int(connection.execute("PRAGMA application_id").fetchone()[0])
+                        == _MIGRATION_CLEANUP_PENDING
+                    ):
+                        connection.execute("PRAGMA application_id = 0")
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+
+    @staticmethod
+    def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
+        return connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _column_signature(connection: sqlite3.Connection) -> tuple[tuple[Any, ...], ...]:
+        return tuple(
+            (
+                str(row["name"]),
+                str(row["type"]).upper(),
+                int(row["notnull"]),
+                row["dflt_value"],
+                int(row["pk"]),
+            )
+            for row in connection.execute("PRAGMA table_info(call_events)")
+        )
+
+    def _verify_legacy_v02_columns(self, connection: sqlite3.Connection) -> None:
+        if self._column_signature(connection) != _LEGACY_V02_COLUMNS:
+            raise UnsupportedLegacySchemaError(
+                "unrecognized legacy schema; expected the released v0.2 call_events columns"
+            )
+
+    def _verify_schema_v2(self, connection: sqlite3.Connection) -> None:
+        if not self._table_exists(connection, "call_events"):
+            raise UnsupportedSchemaVersionError(
+                "schema version 2 is missing the call_events table"
+            )
+        if self._column_signature(connection) != _SCHEMA_V2_COLUMNS:
+            raise UnsupportedSchemaVersionError(
+                "schema version 2 has incompatible call_events columns"
+            )
+
+    @staticmethod
+    def _create_schema_v2(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE call_events (
+                seq INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT NOT NULL UNIQUE,
+                schema_version INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                call_id TEXT NOT NULL,
+                parent_call_id TEXT,
+                phase TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                objective TEXT NOT NULL,
+                route TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                budget_kind TEXT NOT NULL,
+                profile TEXT NOT NULL,
+                quality_risk TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                policy_allowed INTEGER,
+                execution_allowed INTEGER,
+                decision_reason TEXT,
+                progress TEXT,
+                duration_ms REAL,
+                source TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                error_type TEXT,
+                event_type TEXT,
+                observed_at TEXT,
+                trace_id TEXT,
+                turn_id TEXT,
+                span_id TEXT,
+                parent_span_id TEXT,
+                source_event TEXT,
+                agent_id TEXT,
+                tool_name TEXT,
+                input_digest TEXT,
+                fingerprint_version INTEGER,
+                failure_policy TEXT,
+                decision TEXT,
+                reason_code TEXT,
+                policy_version TEXT,
+                budget_before INTEGER,
+                budget_after INTEGER,
+                decision_latency_ms REAL,
+                execution_latency_ms REAL,
+                status TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
+                estimated_cost_usd REAL,
+                pricing_version TEXT,
+                raw_input_stored INTEGER,
+                safe_metadata_json TEXT,
+                policy_facts_json TEXT
+            )
+            """
+        )
+        CallLedger._create_indexes(connection)
+
+    @staticmethod
+    def _create_indexes(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_call_events_session_call "
+            "ON call_events(session_id, call_id, seq)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_call_events_session_fingerprint "
+            "ON call_events(session_id, fingerprint, seq)"
+        )
+
+    def _migrate_v02_to_v2(self, connection: sqlite3.Connection) -> None:
+        prepared_rows: list[tuple[int, str, str]] = []
+        for row in connection.execute(
+            "SELECT seq, phase, source, metadata_json FROM call_events ORDER BY seq"
+        ):
+            phase = str(row["phase"])
+            if phase not in _LEGACY_EVENT_TYPES:
+                raise UnsupportedLegacySchemaError(
+                    f"unrecognized legacy phase {phase!r}; migration was rolled back"
                 )
+            try:
+                decoded = json.loads(str(row["metadata_json"]))
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("legacy metadata_json must contain a JSON object") from exc
+            if not isinstance(decoded, dict):
+                raise ValueError("legacy metadata_json must contain a JSON object")
+            safe = sanitize_metadata(decoded, source=str(row["source"]))
+            prepared_rows.append(
+                (
+                    int(row["seq"]),
+                    _LEGACY_EVENT_TYPES[phase],
+                    json.dumps(safe, ensure_ascii=False, sort_keys=True),
+                )
+            )
+
+        connection.execute("PRAGMA secure_delete = ON")
+        for name, column_type in _V2_ADDED_COLUMNS:
+            connection.execute(f"ALTER TABLE call_events ADD COLUMN {name} {column_type}")
+        for seq, event_type, safe_json in prepared_rows:
+            connection.execute(
+                """
+                UPDATE call_events
+                SET schema_version = ?, event_type = ?, observed_at = occurred_at,
+                    trace_id = session_id, span_id = call_id, source_event = 'legacy',
+                    fingerprint_version = 1, failure_policy = 'legacy-unknown',
+                    policy_version = 'legacy-v0.2', raw_input_stored = 0,
+                    metadata_json = ?, safe_metadata_json = ?
+                WHERE seq = ?
+                """,
+                (SCHEMA_VERSION, event_type, safe_json, safe_json, seq),
+            )
+        self._create_indexes(connection)
+
+    @staticmethod
+    def _cleanup_migrated_storage(connection: sqlite3.Connection) -> None:
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is None or int(checkpoint[0]) != 0:
+            raise RuntimeError("could not checkpoint legacy WAL for secure migration cleanup")
+        connection.execute("VACUUM")
 
     def append(self, event: CallEvent) -> None:
         with closing(self._connect()) as connection:
@@ -122,7 +374,7 @@ class CallLedger:
     def atomic_transition(
         self,
         session_id: str,
-        operation: Callable[[list[dict[str, str]]], tuple[T, Sequence[CallEvent]]],
+        operation: Callable[[list[dict[str, Any]]], tuple[T, Sequence[CallEvent]]],
     ) -> T:
         """Serialize history evaluation and lifecycle reservation in SQLite.
 
@@ -163,44 +415,78 @@ class CallLedger:
 
     @staticmethod
     def _insert(connection: sqlite3.Connection, event: CallEvent) -> None:
+        safe_metadata = sanitize_metadata(event.metadata, source=event.source)
+        safe_metadata_json = json.dumps(
+            safe_metadata,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        policy_facts_json = (
+            None
+            if event.policy_facts is None
+            else json.dumps(
+                dict(event.policy_facts),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        values = {
+            "event_id": event.event_id,
+            "schema_version": event.schema_version,
+            "session_id": event.session_id,
+            "call_id": event.call_id,
+            "parent_call_id": event.parent_call_id,
+            "phase": event.phase,
+            "occurred_at": event.occurred_at,
+            "objective": event.objective,
+            "route": event.route,
+            "fingerprint": event.fingerprint,
+            "budget_kind": event.budget_kind,
+            "profile": event.profile,
+            "quality_risk": event.quality_risk,
+            "mode": event.mode,
+            "policy_allowed": _optional_bool(event.policy_allowed),
+            "execution_allowed": _optional_bool(event.execution_allowed),
+            "decision_reason": event.decision_reason,
+            "progress": event.progress,
+            "duration_ms": event.duration_ms,
+            "source": event.source,
+            "metadata_json": safe_metadata_json,
+            "error_type": event.error_type,
+            "event_type": event.event_type,
+            "observed_at": event.observed_at,
+            "trace_id": event.trace_id,
+            "turn_id": event.turn_id,
+            "span_id": event.span_id,
+            "parent_span_id": event.parent_span_id,
+            "source_event": event.source_event,
+            "agent_id": event.agent_id,
+            "tool_name": event.tool_name,
+            "input_digest": event.input_digest,
+            "fingerprint_version": event.fingerprint_version,
+            "failure_policy": event.failure_policy,
+            "decision": event.decision,
+            "reason_code": event.reason_code,
+            "policy_version": event.policy_version,
+            "budget_before": event.budget_before,
+            "budget_after": event.budget_after,
+            "decision_latency_ms": event.decision_latency_ms,
+            "execution_latency_ms": event.execution_latency_ms,
+            "status": event.status,
+            "prompt_tokens": event.prompt_tokens,
+            "completion_tokens": event.completion_tokens,
+            "total_tokens": event.total_tokens,
+            "estimated_cost_usd": event.estimated_cost_usd,
+            "pricing_version": event.pricing_version,
+            "raw_input_stored": int(event.raw_input_stored),
+            "safe_metadata_json": safe_metadata_json,
+            "policy_facts_json": policy_facts_json,
+        }
+        columns = tuple(values)
+        placeholders = ", ".join("?" for _ in columns)
         connection.execute(
-            """
-                INSERT INTO call_events (
-                    event_id, schema_version, session_id, call_id, parent_call_id,
-                    phase, occurred_at, objective, route, fingerprint, budget_kind,
-                    profile, quality_risk, mode, policy_allowed, execution_allowed,
-                    decision_reason, progress, duration_ms, source, metadata_json,
-                    error_type
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-            (
-                event.event_id,
-                event.schema_version,
-                event.session_id,
-                event.call_id,
-                event.parent_call_id,
-                event.phase,
-                event.occurred_at,
-                event.objective,
-                event.route,
-                event.fingerprint,
-                event.budget_kind,
-                event.profile,
-                event.quality_risk,
-                event.mode,
-                _optional_bool(event.policy_allowed),
-                _optional_bool(event.execution_allowed),
-                event.decision_reason,
-                event.progress,
-                event.duration_ms,
-                event.source,
-                json.dumps(
-                    sanitize_metadata(event.metadata, source=event.source),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                event.error_type,
-            ),
+            f"INSERT INTO call_events ({', '.join(columns)}) VALUES ({placeholders})",
+            tuple(values[column] for column in columns),
         )
 
     def _append_jsonl(self, events: Sequence[CallEvent]) -> None:
@@ -209,7 +495,10 @@ class CallLedger:
         encoded = []
         for event in events:
             value = event.to_dict()
-            value["metadata"] = sanitize_metadata(event.metadata, source=event.source)
+            value["safe_metadata_json"] = sanitize_metadata(
+                event.metadata,
+                source=event.source,
+            )
             encoded.append(
                 json.dumps(
                     value,
@@ -264,12 +553,12 @@ class CallLedger:
             ).fetchone()
         return None if row is None else _event_from_row(row)
 
-    def history(self, session_id: str) -> list[dict[str, str]]:
+    def history(self, session_id: str) -> list[dict[str, Any]]:
         with closing(self._connect()) as connection:
             return self._history(connection, session_id)
 
     @staticmethod
-    def _history(connection: sqlite3.Connection, session_id: str) -> list[dict[str, str]]:
+    def _history(connection: sqlite3.Connection, session_id: str) -> list[dict[str, Any]]:
         placeholders = ",".join("?" for _ in _COUNTED_PHASES)
         query = f"""
             SELECT event.*
@@ -284,12 +573,14 @@ class CallLedger:
             ORDER BY event.seq
         """
         rows = connection.execute(query, (session_id, *_COUNTED_PHASES)).fetchall()
-        history: list[dict[str, str]] = []
+        history: list[dict[str, Any]] = []
         for row in rows:
-            item = {
+            item: dict[str, Any] = {
                 "fingerprint": str(row["fingerprint"]),
                 "budget_kind": str(row["budget_kind"]),
             }
+            if row["fingerprint_version"] is not None:
+                item["fingerprint_version"] = int(row["fingerprint_version"])
             if row["progress"] is not None:
                 item["progress"] = str(row["progress"])
             history.append(item)
@@ -301,6 +592,17 @@ def _optional_bool(value: bool | None) -> int | None:
 
 
 def _event_from_row(row: sqlite3.Row) -> CallEvent:
+    metadata_raw = (
+        row["safe_metadata_json"]
+        if row["safe_metadata_json"] is not None
+        else row["metadata_json"]
+    )
+    metadata = _json_object_from_storage(metadata_raw, "safe_metadata_json")
+    policy_facts = (
+        None
+        if row["policy_facts_json"] is None
+        else _json_object_from_storage(row["policy_facts_json"], "policy_facts_json")
+    )
     return CallEvent(
         schema_version=int(row["schema_version"]),
         event_id=str(row["event_id"]),
@@ -316,6 +618,13 @@ def _event_from_row(row: sqlite3.Row) -> CallEvent:
         profile=str(row["profile"]),
         quality_risk=str(row["quality_risk"]),
         mode=str(row["mode"]),
+        event_type=str(row["event_type"]),
+        observed_at=str(row["observed_at"]),
+        trace_id=str(row["trace_id"]),
+        turn_id=row["turn_id"],
+        span_id=str(row["span_id"]),
+        parent_span_id=row["parent_span_id"],
+        source_event=str(row["source_event"]),
         policy_allowed=None if row["policy_allowed"] is None else bool(row["policy_allowed"]),
         execution_allowed=None
         if row["execution_allowed"] is None
@@ -324,6 +633,40 @@ def _event_from_row(row: sqlite3.Row) -> CallEvent:
         progress=row["progress"],
         duration_ms=row["duration_ms"],
         source=str(row["source"]),
-        metadata=json.loads(str(row["metadata_json"])),
+        metadata=metadata,
         error_type=row["error_type"],
+        agent_id=row["agent_id"],
+        tool_name=row["tool_name"],
+        input_digest=row["input_digest"],
+        fingerprint_version=(
+            None
+            if row["fingerprint_version"] is None
+            else int(row["fingerprint_version"])
+        ),
+        failure_policy=str(row["failure_policy"]),
+        decision=row["decision"],
+        reason_code=row["reason_code"],
+        policy_version=row["policy_version"],
+        budget_before=row["budget_before"],
+        budget_after=row["budget_after"],
+        decision_latency_ms=row["decision_latency_ms"],
+        execution_latency_ms=row["execution_latency_ms"],
+        status=row["status"],
+        prompt_tokens=row["prompt_tokens"],
+        completion_tokens=row["completion_tokens"],
+        total_tokens=row["total_tokens"],
+        estimated_cost_usd=row["estimated_cost_usd"],
+        pricing_version=row["pricing_version"],
+        raw_input_stored=bool(row["raw_input_stored"]),
+        policy_facts=policy_facts,
     )
+
+
+def _json_object_from_storage(value: Any, field_name: str) -> dict[str, Any]:
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{field_name} must contain a JSON object") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(f"{field_name} must contain a JSON object")
+    return decoded

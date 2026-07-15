@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from .fingerprint import build_fingerprint
+from .fingerprint import FINGERPRINT_VERSION, build_fingerprint
 
 
 PROGRESS_VALUES = {"sufficient", "material_progress", "low_progress", "no_progress"}
@@ -49,6 +49,7 @@ REQUIRED_FIELDS = (
     "expected_new_information",
     "stop_condition",
 )
+POLICY_VERSION = "2026-07-14.1"
 
 
 def fingerprint(proposal: dict[str, Any]) -> str:
@@ -120,10 +121,14 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
         )
         if entry_budget_kind == budget_kind:
             matching_history_count += 1
-        if isinstance(entry.get("fingerprint"), str):
-            seen.add(entry["fingerprint"])
-        if "progress" in entry:
-            progress.append(_enum(entry["progress"], PROGRESS_VALUES, "history.progress"))
+            fingerprint_version_matches = (
+                "fingerprint_version" not in entry
+                or entry["fingerprint_version"] == FINGERPRINT_VERSION
+            )
+            if fingerprint_version_matches and isinstance(entry.get("fingerprint"), str):
+                seen.add(entry["fingerprint"])
+            if "progress" in entry:
+                progress.append(_enum(entry["progress"], PROGRESS_VALUES, "history.progress"))
 
     used = budget.get("used", matching_history_count)
     if not isinstance(used, int):

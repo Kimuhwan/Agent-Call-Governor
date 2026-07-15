@@ -91,6 +91,49 @@ class GovernorTests(unittest.TestCase):
         self.assertFalse(result["allowed"])
         self.assertEqual(result["reason"], "duplicate_fingerprint")
 
+    def test_explicit_v2_history_fingerprint_blocks_duplicate(self):
+        current = proposal()
+        result = governor.evaluate({
+            "proposal": current,
+            "history": [{
+                "fingerprint": governor.fingerprint(current),
+                "fingerprint_version": 2,
+                "progress": "material_progress",
+            }],
+        })
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "duplicate_fingerprint")
+
+    def test_legacy_v1_fingerprint_consumes_budget_without_blocking_as_v2_duplicate(self):
+        current = proposal()
+        result = governor.evaluate({
+            "proposal": current,
+            "history": [{
+                "fingerprint": governor.fingerprint(current),
+                "fingerprint_version": 1,
+                "budget_kind": "agent",
+                "progress": "material_progress",
+            }],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["reason"], "allowed")
+        self.assertEqual(result["matching_history_count"], 1)
+        self.assertEqual(result["remaining_after_call"], 0)
+
+    def test_other_budget_kind_does_not_participate_in_duplicate_or_progress_rules(self):
+        current = proposal()
+        result = governor.evaluate({
+            "proposal": current,
+            "history": [{
+                "fingerprint": governor.fingerprint(current),
+                "fingerprint_version": 2,
+                "budget_kind": "direct-tool",
+                "progress": "sufficient",
+            }],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["matching_history_count"], 0)
+
     def test_duplicate_precedes_mandatory_exception(self):
         current = proposal(mandatory_reason="user_requested_action")
         result = governor.evaluate({

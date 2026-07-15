@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Kimuhwan/Agent-Call-Governor/schemas/policy-facts-v1.schema.json",
+  "title": "Agent Call Governor Policy Facts v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fingerprint",
+    "fingerprint_version",
+    "budget_kind",
+    "requested_budget_limit",
+    "profile",
+    "risk",
+    "mandatory_reason",
+    "changed_strategy_present",
+    "required_fields_present",
+    "duplicate_scope",
+    "state_token_digest",
+    "policy_facts_version"
+  ],
+  "properties": {
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "fingerprint_version": {
+      "const": 2
+    },
+    "budget_kind": {
+      "enum": ["agent", "direct-tool"]
+    },
+    "requested_budget_limit": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "profile": {
+      "enum": ["strict", "balanced", "quality-first"]
+    },
+    "risk": {
+      "enum": ["low", "medium", "high"]
+    },
+    "mandatory_reason": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "current_information",
+        "explicit_verification",
+        "high_stakes",
+        "private_state",
+        "missing_file",
+        "user_requested_action",
+        "safety",
+        "system_instruction"
+      ]
+    },
+    "changed_strategy_present": {
+      "type": "boolean"
+    },
+    "required_fields_present": {
+      "type": "boolean"
+    },
+    "duplicate_scope": {
+      "const": "turn"
+    },
+    "state_token_digest": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policy_facts_version": {
+      "const": 1
+    }
+  }
+}

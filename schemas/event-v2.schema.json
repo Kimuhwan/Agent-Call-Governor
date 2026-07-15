@@ -1,0 +1,286 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Kimuhwan/Agent-Call-Governor/schemas/event-v2.schema.json",
+  "title": "Agent Call Governor Event v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_type",
+    "observed_at",
+    "trace_id",
+    "turn_id",
+    "span_id",
+    "parent_span_id",
+    "session_id",
+    "call_id",
+    "parent_call_id",
+    "phase",
+    "occurred_at",
+    "objective",
+    "route",
+    "fingerprint",
+    "budget_kind",
+    "profile",
+    "risk",
+    "mode",
+    "source",
+    "source_event",
+    "agent_id",
+    "tool_name",
+    "input_digest",
+    "fingerprint_version",
+    "failure_policy",
+    "policy_allowed",
+    "execution_allowed",
+    "decision",
+    "reason_code",
+    "decision_reason",
+    "policy_version",
+    "budget_before",
+    "budget_after",
+    "decision_latency_ms",
+    "duration_ms",
+    "execution_latency_ms",
+    "status",
+    "progress",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "estimated_cost_usd",
+    "pricing_version",
+    "raw_input_stored",
+    "safe_metadata_json",
+    "policy_facts_json",
+    "error_type"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "event_type": {
+      "enum": [
+        "session.started",
+        "call.proposed",
+        "policy.decided",
+        "call.started",
+        "call.blocked",
+        "call.completed",
+        "call.failed",
+        "call.cancelled",
+        "progress.observed",
+        "session.stopped"
+      ]
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "turn_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "span_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_span_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "call_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_call_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "phase": {
+      "enum": ["proposed", "blocked", "started", "completed", "failed", "cancelled"]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "objective": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "route": {
+      "type": "string",
+      "minLength": 1
+    },
+    "fingerprint": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "budget_kind": {
+      "enum": ["agent", "direct-tool"]
+    },
+    "profile": {
+      "enum": ["strict", "balanced", "quality-first"]
+    },
+    "risk": {
+      "enum": ["low", "medium", "high"]
+    },
+    "mode": {
+      "enum": ["observe", "warn", "enforce"]
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_event": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_id": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "tool_name": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "input_digest": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "fingerprint_version": {
+      "type": ["integer", "null"],
+      "enum": [null, 1, 2]
+    },
+    "failure_policy": {
+      "enum": ["fail-open", "fail-closed", "legacy-unknown"]
+    },
+    "policy_allowed": {
+      "type": ["boolean", "null"]
+    },
+    "execution_allowed": {
+      "type": ["boolean", "null"]
+    },
+    "decision": {
+      "type": ["string", "null"],
+      "enum": [null, "allow", "would_block", "block", "internal_error"]
+    },
+    "reason_code": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "decision_reason": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "policy_version": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "budget_before": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "budget_after": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "decision_latency_ms": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "duration_ms": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "execution_latency_ms": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "status": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "proposed",
+        "decided",
+        "running",
+        "blocked",
+        "completed",
+        "failed",
+        "cancelled",
+        "observed",
+        "started",
+        "stopped"
+      ]
+    },
+    "progress": {
+      "type": ["string", "null"],
+      "enum": [null, "unknown", "sufficient", "material_progress", "low_progress", "no_progress"]
+    },
+    "prompt_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "completion_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "total_tokens": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "estimated_cost_usd": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "pricing_version": {
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "raw_input_stored": {
+      "const": false
+    },
+    "safe_metadata_json": {
+      "type": "object"
+    },
+    "policy_facts_json": {
+      "type": ["object", "null"]
+    },
+    "error_type": {
+      "type": ["string", "null"],
+      "minLength": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["estimated_cost_usd"],
+        "properties": {
+          "estimated_cost_usd": {
+            "type": "number"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "pricing_version": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}
