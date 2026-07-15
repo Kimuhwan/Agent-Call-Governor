@@ -141,6 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
     hook.add_argument("--mode", choices=("observe", "warn"), default="observe")
     hook.add_argument("--failure-policy", choices=("fail-open", "fail-closed"), default="fail-open")
     hook.add_argument(
+        "--profile",
+        choices=("strict", "balanced", "quality-first"),
+        default="balanced",
+    )
+    hook.add_argument("--risk", choices=("low", "medium", "high"), default="medium")
+    hook.add_argument(
         "--db",
         type=Path,
         default=Path.home() / ".codex" / "agent-call-governor" / "events.sqlite3",
@@ -158,6 +164,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.mode,
                 "--failure-policy",
                 args.failure_policy,
+                "--profile",
+                args.profile,
+                "--risk",
+                args.risk,
                 "--db",
                 str(args.db),
             ]

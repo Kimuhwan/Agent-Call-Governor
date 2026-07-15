@@ -56,6 +56,32 @@ class GovernedRuntimeTests(unittest.TestCase):
         self.assertIsNotNone(events[-1].duration_ms)
         self.assertEqual(events[-1].mode, "observe")
 
+    def test_codex_defaults_do_not_override_application_proposals(self):
+        runtime = GovernedRuntime(
+            self.ledger,
+            default_profile="strict",
+            default_risk="high",
+        )
+        runtime.begin(
+            self.proposal(profile="quality-first", quality_risk="low"),
+            call_id="explicit-application-call",
+        )
+
+        events = self.ledger.events("session-1")
+        self.assertEqual({event.profile for event in events}, {"quality-first"})
+        self.assertEqual({event.quality_risk for event in events}, {"low"})
+
+    def test_codex_runtime_defaults_require_known_string_values(self):
+        for name, value in (
+            ("default_profile", "unknown"),
+            ("default_profile", []),
+            ("default_risk", "unknown"),
+            ("default_risk", []),
+        ):
+            with self.subTest(name=name, value=value):
+                with self.assertRaises(ValueError):
+                    GovernedRuntime(self.ledger, **{name: value})
+
     def test_enforce_blocks_duplicate_before_callable_runs(self):
         runtime = GovernedRuntime(self.ledger, mode="enforce")
         runtime.run(self.proposal(), lambda: "first")

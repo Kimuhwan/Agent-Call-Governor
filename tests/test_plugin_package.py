@@ -68,7 +68,7 @@ class PluginPackageTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "")
-        self.assertEqual(result.stderr, "agent-call-governor hook unavailable: RuntimeError\n")
+        self.assertEqual(result.stderr, "agent-call-governor hook unavailable: JSONDecodeError\n")
         self.assertNotIn(canary, result.stderr)
 
     def test_dispatcher_preserves_successful_hook_stdout(self) -> None:
@@ -80,15 +80,13 @@ class PluginPackageTests(unittest.TestCase):
         )
         replay = {**payload, "tool_use_id": "tool-call-2"}
         with tempfile.TemporaryDirectory() as directory:
-            command = [
-                sys.executable,
-                str(dispatcher),
-                "--mode",
-                "warn",
-                "--db",
-                str(Path(directory) / "events.sqlite3"),
-            ]
-            env = {**os.environ, "PLUGIN_ROOT": str(ROOT)}
+            command = [sys.executable, str(dispatcher)]
+            env = {
+                **os.environ,
+                "PLUGIN_ROOT": str(ROOT),
+                "PLUGIN_DATA": directory,
+                "AGENT_CALL_GOVERNOR_MODE": "warn",
+            }
             first = subprocess.run(
                 command, cwd=ROOT, env=env, input=json.dumps(payload),
                 text=True, capture_output=True, check=False,

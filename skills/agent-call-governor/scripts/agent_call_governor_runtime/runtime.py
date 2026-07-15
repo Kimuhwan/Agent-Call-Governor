@@ -25,6 +25,8 @@ from .policy import (
     POLICY_REASON_CODES,
     POLICY_VERSION,
     PROFILE_LIMITS,
+    PROFILE_NAMES,
+    RISK_VALUES,
     evaluate,
     validate_policy_context,
 )
@@ -71,6 +73,8 @@ class GovernedRuntime:
         policy_evaluator: Callable[[dict[str, Any]], dict[str, Any]] = evaluate,
         warning_handler: Callable[[str], None] | None = None,
         source: str = "runtime",
+        default_profile: str = "balanced",
+        default_risk: str = "medium",
     ) -> None:
         if mode not in RUNTIME_MODES:
             raise ValueError(f"mode must be one of: {', '.join(sorted(RUNTIME_MODES))}")
@@ -80,12 +84,22 @@ class GovernedRuntime:
             )
         if not isinstance(source, str) or not source.strip():
             raise ValueError("source must be a non-empty string")
+        if not isinstance(default_profile, str) or default_profile not in PROFILE_NAMES:
+            raise ValueError(
+                f"default_profile must be one of: {', '.join(sorted(PROFILE_NAMES))}"
+            )
+        if not isinstance(default_risk, str) or default_risk not in RISK_VALUES:
+            raise ValueError(
+                f"default_risk must be one of: {', '.join(sorted(RISK_VALUES))}"
+            )
         self.ledger = ledger
         self.mode = mode
         self.failure_policy = failure_policy
         self.policy_evaluator = policy_evaluator
         self.warning_handler = warning_handler or self._default_warning
         self.source = source.strip()
+        self.default_profile = default_profile
+        self.default_risk = default_risk
 
     def begin(
         self,
@@ -93,22 +107,33 @@ class GovernedRuntime:
         *,
         call_id: str | None = None,
         source: str | None = None,
+        source_event: str | None = None,
     ) -> CallHandle:
         call_id = call_id or str(uuid.uuid4())
         if not isinstance(call_id, str) or not call_id.strip():
             raise ValueError("call_id must be a non-empty string")
         call_id = call_id.strip()
         event_source = (source or self.source).strip()
+        host_source_event = source_event or event_source
+        if not isinstance(host_source_event, str) or not host_source_event.strip():
+            raise ValueError("source_event must be a non-empty string")
+        host_source_event = host_source_event.strip()
         atomic_transition = getattr(self.ledger, "atomic_transition", None)
         if callable(atomic_transition):
             decision = self._atomic_begin(
                 proposal,
                 call_id,
                 event_source,
+                host_source_event,
                 atomic_transition,
             )
         else:
-            decision = self._non_atomic_begin(proposal, call_id, event_source)
+            decision = self._non_atomic_begin(
+                proposal,
+                call_id,
+                event_source,
+                host_source_event,
+            )
 
         if not decision.execution_allowed:
             raise GovernanceBlocked(decision)
@@ -128,6 +153,7 @@ class GovernedRuntime:
         proposal: CallProposal,
         call_id: str,
         event_source: str,
+        host_source_event: str,
         atomic_transition: Callable[..., RuntimeDecision],
     ) -> RuntimeDecision:
         proposal_fingerprint = proposal.fingerprint
@@ -148,6 +174,7 @@ class GovernedRuntime:
                     "proposed",
                     event_type="call.proposed",
                     source=event_source,
+                    source_event=host_source_event,
                     metadata={},
                     policy_facts=policy_facts,
                 )
@@ -160,6 +187,7 @@ class GovernedRuntime:
                     "proposed",
                     event_type="policy.decided",
                     source=event_source,
+                    source_event=host_source_event,
                     metadata=decision_metadata,
                     include_proposal_metadata=False,
                 )
@@ -174,6 +202,7 @@ class GovernedRuntime:
                         "call.started" if decision.execution_allowed else "call.blocked"
                     ),
                     source=event_source,
+                    source_event=host_source_event,
                     metadata={},
                 )
             )
@@ -200,6 +229,7 @@ class GovernedRuntime:
         proposal: CallProposal,
         call_id: str,
         event_source: str,
+        host_source_event: str,
     ) -> RuntimeDecision:
         decision = self._decide(proposal)
         policy_facts = build_policy_facts(proposal)
@@ -213,6 +243,7 @@ class GovernedRuntime:
                 "proposed",
                 event_type="call.proposed",
                 source=event_source,
+                source_event=host_source_event,
                 metadata={},
                 policy_facts=policy_facts,
             ),
@@ -227,6 +258,7 @@ class GovernedRuntime:
                 "proposed",
                 event_type="policy.decided",
                 source=event_source,
+                source_event=host_source_event,
                 metadata=decision_metadata,
                 include_proposal_metadata=False,
             ),
@@ -242,6 +274,7 @@ class GovernedRuntime:
                     "blocked",
                     event_type="call.blocked",
                     source=event_source,
+                    source_event=host_source_event,
                     metadata={},
                 ),
                 "blocked decision",
@@ -256,6 +289,7 @@ class GovernedRuntime:
                 "started",
                 event_type="call.started",
                 source=event_source,
+                source_event=host_source_event,
                 metadata={},
             ),
             "call start",
@@ -290,10 +324,17 @@ class GovernedRuntime:
         *,
         call_id: str | None = None,
         source: str | None = None,
+        source_event: str | None = None,
     ) -> CallHandle:
         """Reserve a call without blocking the event loop or leaking on cancellation."""
         begin_task = asyncio.create_task(
-            asyncio.to_thread(self.begin, proposal, call_id=call_id, source=source)
+            asyncio.to_thread(
+                self.begin,
+                proposal,
+                call_id=call_id,
+                source=source,
+                source_event=source_event,
+            )
         )
         try:
             return await asyncio.shield(begin_task)
@@ -536,6 +577,7 @@ class GovernedRuntime:
         progress: str | None = None,
         duration_ms: float | None = None,
         source: str,
+        source_event: str | None = None,
         metadata: Mapping[str, Any],
         error_type: str | None = None,
         policy_facts: Mapping[str, Any] | None = None,
@@ -587,7 +629,7 @@ class GovernedRuntime:
             turn_id=proposal.turn_id,
             span_id=call_id,
             parent_span_id=proposal.parent_call_id,
-            source_event=source,
+            source_event=source_event or source,
             input_digest=proposal.fingerprint_result.input_digest,
             fingerprint_version=proposal.fingerprint_result.version,
             failure_policy=self.failure_policy,

@@ -158,6 +158,7 @@ _TERMINAL_EVENT_TYPES = frozenset({
     "call.failed",
     "call.cancelled",
 })
+_SHA256_REFERENCE = re.compile(r"sha256:[0-9a-f]{64}")
 
 
 def _bounded_integer(
@@ -879,24 +880,29 @@ class CallLedger:
                 self._insert(connection, event)
         self._mirror_best_effort((event,))
 
-    def append_terminal_if_open(self, event: CallEvent) -> bool:
-        """Atomically append one terminal phase for an open lifecycle call."""
-        if event.phase not in {"completed", "failed", "cancelled"}:
-            raise ValueError("terminal event phase must be completed, failed, or cancelled")
+    def append_event_if_new(self, event: CallEvent) -> bool:
+        """Atomically append one turn-addressed session stop."""
+        if event.event_type != "session.stopped":
+            raise ValueError("strict delivery append supports session.stopped only")
+        if not _SHA256_REFERENCE.fullmatch(event.trace_id):
+            raise ValueError("strict delivery trace_id must be a SHA-256 reference")
+        if not _SHA256_REFERENCE.fullmatch(event.call_id):
+            raise ValueError("strict delivery call_id must be a SHA-256 reference")
         inserted = False
         with closing(self._connect()) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                latest = connection.execute(
+                rows = connection.execute(
                     """
-                    SELECT phase FROM call_events
-                    WHERE session_id = ? AND call_id = ?
-                    ORDER BY seq DESC
-                    LIMIT 1
+                    SELECT * FROM call_events
+                    WHERE session_id = ? AND call_id = ? AND event_type = ?
+                    ORDER BY seq
                     """,
-                    (event.session_id, event.call_id),
-                ).fetchone()
-                if latest is not None and str(latest["phase"]) in {"proposed", "started"}:
+                    (event.session_id, event.call_id, event.event_type),
+                ).fetchall()
+                for row in rows:
+                    _event_from_row(row)
+                if not rows:
                     self._insert(connection, event)
                     inserted = True
                 connection.commit()
@@ -905,6 +911,130 @@ class CallLedger:
                 raise
         if inserted:
             self._mirror_best_effort((event,))
+        return inserted
+
+    def append_bounded_delivery_if_new(
+        self,
+        event: CallEvent,
+        delivery_digest: str,
+        *,
+        window_seconds: int = 5,
+    ) -> bool:
+        """Append one anonymous delivery unless its digest is recent."""
+        window = _bounded_integer(window_seconds, "window_seconds", minimum=1)
+        if not isinstance(delivery_digest, str) or not _SHA256_REFERENCE.fullmatch(
+            delivery_digest
+        ):
+            raise ValueError("delivery_digest must be a SHA-256 reference")
+        if event.input_digest != delivery_digest:
+            raise ValueError("event input_digest must match delivery_digest")
+        if not _SHA256_REFERENCE.fullmatch(event.trace_id):
+            raise ValueError("bounded delivery trace_id must be a SHA-256 reference")
+        observed = _observed_datetime(event.observed_at)
+        inserted = False
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    """
+                    SELECT * FROM call_events
+                    WHERE trace_id = ? AND event_type = ? AND input_digest = ?
+                    ORDER BY seq
+                    """,
+                    (event.trace_id, event.event_type, delivery_digest),
+                ).fetchall()
+                prior_events = [_event_from_row(row) for row in rows]
+                duplicate = any(
+                    abs((observed - _observed_datetime(prior.observed_at)).total_seconds())
+                    <= window
+                    for prior in prior_events
+                )
+                if not duplicate:
+                    self._insert(connection, event)
+                    inserted = True
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        if inserted:
+            self._mirror_best_effort((event,))
+        return inserted
+
+    def append_terminal_if_open(self, event: CallEvent) -> bool:
+        """Atomically append one terminal phase for an open lifecycle call."""
+        return self.append_terminal_with_progress_if_open(event, None)
+
+    def append_terminal_with_progress_if_open(
+        self,
+        event: CallEvent,
+        progress_event: CallEvent | None,
+    ) -> bool:
+        """Atomically append a terminal and its optional progress observation."""
+        if event.phase not in {"completed", "failed", "cancelled"}:
+            raise ValueError("terminal event phase must be completed, failed, or cancelled")
+        if progress_event is not None:
+            _validate_progress_companion(event, progress_event)
+        inserted = False
+        committed_events: tuple[CallEvent, ...] = ()
+        with closing(self._connect()) as connection:
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                rows = connection.execute(
+                    """
+                    SELECT * FROM call_events
+                    WHERE session_id = ? AND call_id = ?
+                    ORDER BY seq
+                    """,
+                    (event.session_id, event.call_id),
+                ).fetchall()
+                existing_events = [_event_from_row(row) for row in rows]
+                latest = existing_events[-1] if existing_events else None
+                if latest is not None and latest.phase in {"proposed", "started"}:
+                    decision = _stored_runtime_decision(existing_events)
+                    _validate_atomic_reservation(
+                        (*existing_events, event),
+                        decision,
+                        session_id=event.session_id,
+                        call_id=event.call_id,
+                        fingerprint=event.fingerprint,
+                        allow_terminal_suffix=True,
+                    )
+                    first = existing_events[0]
+                    if (
+                        event.agent_id != first.agent_id
+                        or event.tool_name != first.tool_name
+                    ):
+                        raise ValueError(
+                            "terminal event must preserve canonical adapter identity"
+                        )
+                    if progress_event is not None:
+                        collision = connection.execute(
+                            """
+                            SELECT 1 FROM call_events
+                            WHERE session_id = ? AND call_id = ?
+                            LIMIT 1
+                            """,
+                            (progress_event.session_id, progress_event.call_id),
+                        ).fetchone()
+                        if collision is not None:
+                            raise ValueError(
+                                "progress observation call identity is already in use"
+                            )
+                    self._insert(connection, event)
+                    if progress_event is not None:
+                        self._insert(connection, progress_event)
+                    inserted = True
+                    committed_events = (
+                        (event, progress_event)
+                        if progress_event is not None
+                        else (event,)
+                    )
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+        if inserted:
+            self._mirror_best_effort(committed_events)
         return inserted
 
     def atomic_transition(
@@ -1367,6 +1497,84 @@ def _validate_reservation_policy_facts(
         or context["budget_floor_applied"] is not floor_applied
     ):
         raise ValueError("atomic transition requested budget fact contradicts policy context")
+
+
+def _validate_progress_companion(
+    terminal: CallEvent,
+    progress: CallEvent,
+) -> None:
+    """Require one isolated, privacy-safe observation of a terminal signal."""
+    if (
+        progress.event_type != "progress.observed"
+        or progress.phase != "completed"
+        or progress.status != "observed"
+    ):
+        raise ValueError("progress observation must use the canonical observed shape")
+    if (
+        progress.call_id != progress.span_id
+        or progress.call_id in {terminal.call_id, terminal.span_id}
+        or progress.span_id in {terminal.call_id, terminal.span_id}
+        or progress.event_id == terminal.event_id
+        or progress.parent_call_id != terminal.call_id
+        or progress.parent_span_id != terminal.span_id
+    ):
+        raise ValueError("progress observation must use an isolated child identity")
+
+    shared_fields = (
+        "session_id",
+        "trace_id",
+        "turn_id",
+        "fingerprint",
+        "fingerprint_version",
+        "input_digest",
+        "objective",
+        "route",
+        "budget_kind",
+        "profile",
+        "quality_risk",
+        "mode",
+        "failure_policy",
+        "source",
+        "source_event",
+        "occurred_at",
+        "observed_at",
+        "progress",
+        "metadata",
+        "agent_id",
+        "tool_name",
+    )
+    if any(
+        getattr(progress, field_name) != getattr(terminal, field_name)
+        for field_name in shared_fields
+    ):
+        raise ValueError("progress observation must exactly describe its terminal call")
+    if progress.progress not in {"sufficient", "material_progress", "low_progress"}:
+        raise ValueError("progress observation must contain a deterministic progress signal")
+
+    forbidden_fields = (
+        "policy_allowed",
+        "execution_allowed",
+        "decision_reason",
+        "decision",
+        "reason_code",
+        "policy_version",
+        "budget_before",
+        "budget_after",
+        "decision_latency_ms",
+        "error_type",
+        "duration_ms",
+        "execution_latency_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "estimated_cost_usd",
+        "pricing_version",
+        "policy_facts",
+    )
+    if any(getattr(progress, field_name) is not None for field_name in forbidden_fields):
+        raise ValueError(
+            "progress observation cannot contain decision, error, metric, or policy fields"
+        )
 
 
 def _validate_atomic_reservation(

@@ -156,7 +156,7 @@ class RuntimeCLITests(unittest.TestCase):
             [
                 event.event_type
                 for event in CallLedger(hook_db).events(
-                    "codex:session:"
+                    "codex:trace:"
                     f"{hashlib.sha256(b'session-1').hexdigest()}:turn:"
                     f"{hashlib.sha256(b'turn-1').hexdigest()}"
                 )

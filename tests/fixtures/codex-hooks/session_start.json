@@ -1,0 +1,6 @@
+{
+  "hook_event_name": "SessionStart",
+  "session_id": "private-session-id",
+  "cwd": "C:/Users/Ada/private-repo",
+  "source": "startup"
+}
