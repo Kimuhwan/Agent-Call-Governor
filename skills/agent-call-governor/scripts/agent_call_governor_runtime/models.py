@@ -1,0 +1,821 @@
+"""Validated public data models for governed calls and lifecycle records."""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import math
+import time
+import uuid
+from dataclasses import KW_ONLY, dataclass, field, fields
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping
+
+from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerprint
+from .policy import (
+    BUDGET_KINDS,
+    MANDATORY_REASONS,
+    POLICY_CONTEXT_FIELDS,
+    PROFILE_NAMES,
+    PROGRESS_VALUES,
+    RISK_VALUES,
+)
+from .redaction import sanitize_metadata
+
+
+EVENT_PHASES = {"proposed", "blocked", "started", "completed", "failed", "cancelled"}
+EVENT_TYPES = {
+    "session.started",
+    "call.proposed",
+    "policy.decided",
+    "call.started",
+    "call.blocked",
+    "call.completed",
+    "call.failed",
+    "call.cancelled",
+    "progress.observed",
+    "session.stopped",
+}
+LEGACY_EVENT_TYPES = {
+    "proposed": "call.proposed",
+    "blocked": "call.blocked",
+    "started": "call.started",
+    "completed": "call.completed",
+    "failed": "call.failed",
+    "cancelled": "call.cancelled",
+}
+RUNTIME_MODES = {"observe", "warn", "enforce"}
+FAILURE_POLICIES = {"fail-open", "fail-closed"}
+EVENT_FAILURE_POLICIES = FAILURE_POLICIES | {"legacy-unknown"}
+EVENT_PROGRESS_VALUES = PROGRESS_VALUES | {"unknown"}
+DECISION_VALUES = {"allow", "would_block", "block", "internal_error"}
+STATUS_VALUES = {
+    "proposed",
+    "decided",
+    "running",
+    "blocked",
+    "completed",
+    "failed",
+    "cancelled",
+    "observed",
+    "started",
+    "stopped",
+}
+POLICY_FACTS_VERSION = 1
+_POLICY_FACT_FIELDS = frozenset({
+    "fingerprint",
+    "fingerprint_version",
+    "budget_kind",
+    "requested_budget_limit",
+    "profile",
+    "risk",
+    "mandatory_reason",
+    "changed_strategy_present",
+    "required_fields_present",
+    "duplicate_scope",
+    "state_token_digest",
+    "policy_facts_version",
+})
+
+
+def _nonempty(value: str, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field_name} must be a non-empty string")
+    return value.strip()
+
+
+def _choice(value: Any, allowed: set[str], field_name: str) -> str:
+    if not isinstance(value, str) or value not in allowed:
+        raise ValueError(f"{field_name} must be one of: {', '.join(sorted(allowed))}")
+    return value
+
+
+def _objective_reference(value: str) -> str:
+    """Return a stable non-plaintext reference for an event objective."""
+    objective = _nonempty(value, "objective")
+    if (
+        objective.startswith("sha256:")
+        and len(objective) == 71
+        and all(character in "0123456789abcdef" for character in objective[7:])
+    ):
+        return objective
+    digest = hashlib.sha256(objective.encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _json_object(value: Mapping[str, Any], field_name: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be an object")
+    try:
+        encoded = json.dumps(dict(value), ensure_ascii=False, allow_nan=False)
+        encoded.encode("utf-8")
+        decoded = json.loads(encoded)
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} must contain only UTF-8-encodable text") from exc
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be JSON-compatible") from exc
+    if not isinstance(decoded, dict):  # defensive; Mapping always encodes as an object
+        raise ValueError(f"{field_name} must be an object")
+    return decoded
+
+
+def _is_sha256_reference(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("sha256:")
+        and len(value) == 71
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _is_bare_sha256_digest(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _is_event_fingerprint(value: Any, fingerprint_version: Any) -> bool:
+    return _is_sha256_reference(value) or (
+        fingerprint_version == 1 and _is_bare_sha256_digest(value)
+    )
+
+
+def _validate_policy_facts(value: dict[str, Any]) -> dict[str, Any]:
+    if set(value) != _POLICY_FACT_FIELDS:
+        raise ValueError("policy_facts must contain exactly the approved privacy-safe fields")
+    if not _is_sha256_reference(value["fingerprint"]):
+        raise ValueError("policy_facts.fingerprint must be a SHA-256 reference")
+    if (
+        not isinstance(value["fingerprint_version"], int)
+        or isinstance(value["fingerprint_version"], bool)
+        or value["fingerprint_version"] != FINGERPRINT_VERSION
+    ):
+        raise ValueError(
+            f"policy_facts.fingerprint_version must be {FINGERPRINT_VERSION}"
+        )
+    _choice(value["budget_kind"], BUDGET_KINDS, "policy_facts.budget_kind")
+    requested_limit = value["requested_budget_limit"]
+    if requested_limit is not None and (
+        not isinstance(requested_limit, int)
+        or isinstance(requested_limit, bool)
+        or requested_limit < 0
+    ):
+        raise ValueError(
+            "policy_facts.requested_budget_limit must be null or a non-negative integer"
+        )
+    _choice(value["profile"], PROFILE_NAMES, "policy_facts.profile")
+    _choice(value["risk"], RISK_VALUES, "policy_facts.risk")
+    mandatory_reason = value["mandatory_reason"]
+    if mandatory_reason is not None:
+        _choice(mandatory_reason, MANDATORY_REASONS, "policy_facts.mandatory_reason")
+    for field_name in ("changed_strategy_present", "required_fields_present"):
+        if type(value[field_name]) is not bool:
+            raise ValueError(f"policy_facts.{field_name} must be a boolean")
+    if value["duplicate_scope"] != "turn":
+        raise ValueError("policy_facts.duplicate_scope must be turn")
+    state_token_digest = value["state_token_digest"]
+    if state_token_digest is not None and not _is_sha256_reference(state_token_digest):
+        raise ValueError(
+            "policy_facts.state_token_digest must be null or a SHA-256 reference"
+        )
+    if (
+        not isinstance(value["policy_facts_version"], int)
+        or isinstance(value["policy_facts_version"], bool)
+        or value["policy_facts_version"] != POLICY_FACTS_VERSION
+    ):
+        raise ValueError(
+            f"policy_facts.policy_facts_version must be {POLICY_FACTS_VERSION}"
+        )
+    return value
+
+
+def _policy_facts_copy(value: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return _validate_policy_facts(_json_object(value, "policy_facts"))
+
+
+def _optional_boolean(value: Any, field_name: str) -> bool | None:
+    if value is not None and type(value) is not bool:
+        raise ValueError(f"{field_name} must be a boolean or null")
+    return value
+
+
+def _sanitized_event_metadata(event: "CallEvent") -> dict[str, Any]:
+    return sanitize_metadata(
+        _json_object(event.metadata, "metadata"),
+        source=event.source,
+    )
+
+
+def _validate_event_boundary(event: "CallEvent") -> dict[str, Any] | None:
+    """Revalidate every event-v2 field at an output boundary without coercion."""
+    if type(event.schema_version) is not int or event.schema_version != 2:
+        raise ValueError("schema_version must be 2 at canonical boundaries")
+    for name in (
+        "event_id",
+        "session_id",
+        "call_id",
+        "occurred_at",
+        "route",
+        "source",
+        "observed_at",
+        "trace_id",
+        "span_id",
+        "source_event",
+    ):
+        _nonempty(getattr(event, name), name)
+    for name in (
+        "parent_call_id",
+        "turn_id",
+        "parent_span_id",
+        "agent_id",
+        "tool_name",
+        "reason_code",
+        "decision_reason",
+        "policy_version",
+        "pricing_version",
+        "error_type",
+    ):
+        value = getattr(event, name)
+        if value is not None:
+            _nonempty(value, name)
+    if not _is_sha256_reference(event.objective):
+        raise ValueError("objective must be a SHA-256 reference")
+    if not _is_event_fingerprint(event.fingerprint, event.fingerprint_version):
+        raise ValueError(
+            "fingerprint must be a SHA-256 reference; legacy v1 may use a bare digest"
+        )
+    if event.input_digest is not None and not _is_sha256_reference(event.input_digest):
+        raise ValueError("input_digest must be null or a SHA-256 reference")
+    _choice(event.phase, EVENT_PHASES, "phase")
+    _choice(event.event_type, EVENT_TYPES, "event_type")
+    _choice(event.budget_kind, BUDGET_KINDS, "budget_kind")
+    _choice(event.profile, PROFILE_NAMES, "profile")
+    _choice(event.quality_risk, RISK_VALUES, "quality_risk")
+    _choice(event.mode, RUNTIME_MODES, "mode")
+    _choice(event.failure_policy, EVENT_FAILURE_POLICIES, "failure_policy")
+    if event.progress is not None:
+        _choice(event.progress, EVENT_PROGRESS_VALUES, "progress")
+    if event.decision is not None:
+        _choice(event.decision, DECISION_VALUES, "decision")
+    if event.status is not None:
+        _choice(event.status, STATUS_VALUES, "status")
+    _optional_boolean(event.policy_allowed, "policy_allowed")
+    _optional_boolean(event.execution_allowed, "execution_allowed")
+    if event.fingerprint_version is not None and (
+        type(event.fingerprint_version) is not int
+        or event.fingerprint_version not in {1, FINGERPRINT_VERSION}
+    ):
+        raise ValueError(
+            f"fingerprint_version must be null, 1, or {FINGERPRINT_VERSION}"
+        )
+    for name in (
+        "budget_before",
+        "budget_after",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+    ):
+        value = getattr(event, name)
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError(f"{name} must be a non-negative integer")
+    for name in (
+        "duration_ms",
+        "decision_latency_ms",
+        "execution_latency_ms",
+        "estimated_cost_usd",
+    ):
+        value = getattr(event, name)
+        if value is not None and (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(f"{name} must be a non-negative finite number")
+    if event.estimated_cost_usd is not None and event.pricing_version is None:
+        raise ValueError("pricing_version is required when estimated_cost_usd is set")
+    if event.raw_input_stored is not False:
+        raise ValueError("raw_input_stored must be false")
+    if (
+        event.event_type != "policy.decided"
+        and set(event.metadata) & POLICY_CONTEXT_FIELDS
+    ):
+        raise ValueError("policy context is allowed only on policy.decided")
+    _json_object(event.metadata, "metadata")
+    return _policy_facts_copy(event.policy_facts)
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+@dataclass(frozen=True)
+class CallProposal:
+    session_id: str
+    objective: str
+    route: str
+    capability_gap: str
+    expected_new_information: str
+    stop_condition: str
+    material_inputs: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    budget_kind: str = "agent"
+    profile: str = "balanced"
+    quality_risk: str = "medium"
+    budget_limit: int | None = None
+    mandatory_reason: str | None = None
+    changed_strategy: str | None = None
+    parent_call_id: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    trace_id: str | None = None
+    turn_id: str | None = None
+    _fingerprint_result: FingerprintResult = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        for name in (
+            "session_id",
+            "objective",
+            "route",
+            "capability_gap",
+            "expected_new_information",
+            "stop_condition",
+        ):
+            object.__setattr__(self, name, _nonempty(getattr(self, name), name))
+        object.__setattr__(self, "budget_kind", _choice(self.budget_kind, BUDGET_KINDS, "budget_kind"))
+        object.__setattr__(self, "profile", _choice(self.profile, PROFILE_NAMES, "profile"))
+        object.__setattr__(self, "quality_risk", _choice(self.quality_risk, RISK_VALUES, "quality_risk"))
+        if self.budget_limit is not None and (
+            not isinstance(self.budget_limit, int) or isinstance(self.budget_limit, bool) or self.budget_limit < 0
+        ):
+            raise ValueError("budget_limit must be a non-negative integer")
+        if self.mandatory_reason is not None:
+            object.__setattr__(
+                self,
+                "mandatory_reason",
+                _choice(self.mandatory_reason, MANDATORY_REASONS, "mandatory_reason"),
+            )
+        if self.changed_strategy is not None:
+            object.__setattr__(self, "changed_strategy", _nonempty(self.changed_strategy, "changed_strategy"))
+        if self.parent_call_id is not None:
+            object.__setattr__(self, "parent_call_id", _nonempty(self.parent_call_id, "parent_call_id"))
+        if self.trace_id is None:
+            object.__setattr__(self, "trace_id", self.session_id)
+        else:
+            object.__setattr__(self, "trace_id", _nonempty(self.trace_id, "trace_id"))
+        if self.turn_id is not None:
+            object.__setattr__(self, "turn_id", _nonempty(self.turn_id, "turn_id"))
+        object.__setattr__(self, "material_inputs", _json_object(self.material_inputs, "material_inputs"))
+        object.__setattr__(self, "metadata", _json_object(self.metadata, "metadata"))
+        object.__setattr__(
+            self,
+            "_fingerprint_result",
+            build_fingerprint(
+                objective=self.objective,
+                route=self.route,
+                material_inputs=self.material_inputs,
+                cwd=self.metadata.get("cwd"),
+                tool_version=self.metadata.get("tool_version"),
+                state_token=self.metadata.get("state_token"),
+            ),
+        )
+
+    @property
+    def fingerprint(self) -> str:
+        return self.fingerprint_result.digest
+
+    @property
+    def fingerprint_result(self) -> FingerprintResult:
+        return self._fingerprint_result
+
+    def to_policy_proposal(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "objective": self.objective,
+            "route": self.route,
+            "material_inputs": dict(self.material_inputs),
+            "capability_gap": self.capability_gap,
+            "expected_new_information": self.expected_new_information,
+            "stop_condition": self.stop_condition,
+        }
+        if self.mandatory_reason is not None:
+            value["mandatory_reason"] = self.mandatory_reason
+        if self.changed_strategy is not None:
+            value["changed_strategy"] = self.changed_strategy
+        fingerprint_metadata = {
+            key: self.metadata[key]
+            for key in ("cwd", "tool_version", "state_token")
+            if key in self.metadata
+        }
+        if fingerprint_metadata:
+            value["metadata"] = fingerprint_metadata
+        return value
+
+    def to_policy_document(self, history: Iterable[dict[str, Any]]) -> dict[str, Any]:
+        budget: dict[str, Any] = {"kind": self.budget_kind}
+        if self.budget_limit is not None:
+            budget["limit"] = self.budget_limit
+        return {
+            "proposal": self.to_policy_proposal(),
+            "profile": self.profile,
+            "quality_risk": self.quality_risk,
+            "budget": budget,
+            "history": list(history),
+        }
+
+
+def build_policy_facts(proposal: CallProposal) -> dict[str, Any]:
+    """Build the exact privacy-safe proposal facts persisted for replay analysis."""
+    result = proposal.fingerprint_result
+    return {
+        "fingerprint": result.digest,
+        "fingerprint_version": result.version,
+        "budget_kind": proposal.budget_kind,
+        "requested_budget_limit": proposal.budget_limit,
+        "profile": proposal.profile,
+        "risk": proposal.quality_risk,
+        "mandatory_reason": proposal.mandatory_reason,
+        "changed_strategy_present": proposal.changed_strategy is not None,
+        "required_fields_present": all((
+            bool(proposal.capability_gap),
+            bool(proposal.expected_new_information),
+            bool(proposal.stop_condition),
+        )),
+        "duplicate_scope": "turn",
+        "state_token_digest": result.state_token_digest,
+        "policy_facts_version": POLICY_FACTS_VERSION,
+    }
+
+
+@dataclass(frozen=True)
+class RuntimeDecision:
+    policy_allowed: bool
+    execution_allowed: bool
+    reason: str
+    fingerprint: str
+    remaining_after_call: int | None = None
+    context: Mapping[str, Any] = field(default_factory=dict)
+    budget_before: int | None = None
+    budget_after: int | None = None
+    decision_latency_ms: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("policy_allowed", "execution_allowed"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        object.__setattr__(self, "reason", _nonempty(self.reason, "reason"))
+        if not (
+            _is_sha256_reference(self.fingerprint)
+            or _is_bare_sha256_digest(self.fingerprint)
+        ):
+            raise ValueError(
+                "fingerprint must be a SHA-256 reference or released v1 bare digest"
+            )
+        for name in ("remaining_after_call", "budget_before", "budget_after"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"{name} must be a non-negative integer or null")
+        if (
+            self.remaining_after_call is not None
+            and self.budget_after is not None
+            and self.remaining_after_call != self.budget_after
+        ):
+            raise ValueError("remaining_after_call and budget_after must match")
+        resolved_budget_after = (
+            self.budget_after
+            if self.budget_after is not None
+            else self.remaining_after_call
+        )
+        object.__setattr__(self, "budget_after", resolved_budget_after)
+        object.__setattr__(self, "remaining_after_call", resolved_budget_after)
+        if self.decision_latency_ms is not None and (
+            not isinstance(self.decision_latency_ms, (int, float))
+            or isinstance(self.decision_latency_ms, bool)
+            or not math.isfinite(self.decision_latency_ms)
+            or self.decision_latency_ms < 0
+        ):
+            raise ValueError("decision_latency_ms must be a non-negative finite number or null")
+        object.__setattr__(self, "context", _json_object(self.context, "context"))
+
+
+@dataclass(frozen=True)
+class CallHandle:
+    proposal: CallProposal
+    call_id: str
+    decision: RuntimeDecision
+    started_at_ns: int = field(default_factory=time.perf_counter_ns)
+
+
+@dataclass(frozen=True)
+class SessionSummary:
+    session_id: str
+    first_observed_at: str
+    last_observed_at: str
+    call_count: int
+    event_count: int
+    final_status: str
+
+
+@dataclass(frozen=True)
+class DoctorCheck:
+    name: str
+    status: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.status not in {"pass", "warn", "fail"}:
+            raise ValueError("doctor status must be pass, warn, or fail")
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("doctor name must be a non-empty string")
+        if not isinstance(self.detail, str) or not self.detail:
+            raise ValueError("doctor detail must be a non-empty string")
+
+
+@dataclass(frozen=True)
+class CallEvent:
+    event_id: str
+    session_id: str
+    call_id: str
+    phase: str
+    occurred_at: str
+    objective: str
+    route: str
+    fingerprint: str
+    budget_kind: str
+    profile: str
+    quality_risk: str
+    mode: str
+    policy_allowed: bool | None = None
+    execution_allowed: bool | None = None
+    decision_reason: str | None = None
+    progress: str | None = None
+    parent_call_id: str | None = None
+    duration_ms: float | None = None
+    source: str = "runtime"
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    error_type: str | None = None
+    schema_version: int = 1
+    _: KW_ONLY
+    event_type: str | None = None
+    observed_at: str | None = None
+    trace_id: str | None = None
+    turn_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    source_event: str | None = None
+    agent_id: str | None = None
+    tool_name: str | None = None
+    input_digest: str | None = None
+    fingerprint_version: int | None = None
+    failure_policy: str = "fail-open"
+    decision: str | None = None
+    reason_code: str | None = None
+    policy_version: str | None = None
+    budget_before: int | None = None
+    budget_after: int | None = None
+    decision_latency_ms: float | None = None
+    execution_latency_ms: float | None = None
+    status: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
+    pricing_version: str | None = None
+    raw_input_stored: bool = False
+    policy_facts: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        input_schema_version = self.schema_version
+        if (
+            self.fingerprint_version is None
+            and type(input_schema_version) is int
+            and input_schema_version == 1
+        ):
+            object.__setattr__(self, "fingerprint_version", 1)
+        for name in (
+            "event_id",
+            "session_id",
+            "call_id",
+            "occurred_at",
+            "objective",
+            "route",
+            "fingerprint",
+            "source",
+        ):
+            object.__setattr__(self, name, _nonempty(getattr(self, name), name))
+        if not _is_event_fingerprint(self.fingerprint, self.fingerprint_version):
+            raise ValueError(
+                "fingerprint must be a SHA-256 reference; legacy v1 may use a bare digest"
+            )
+        object.__setattr__(self, "objective", _objective_reference(self.objective))
+        object.__setattr__(self, "phase", _choice(self.phase, EVENT_PHASES, "phase"))
+        canonical_defaults = {
+            "event_type": LEGACY_EVENT_TYPES[self.phase],
+            "observed_at": self.occurred_at,
+            "trace_id": self.session_id,
+            "span_id": self.call_id,
+            "parent_span_id": self.parent_call_id,
+            "source_event": self.source,
+        }
+        for name, default in canonical_defaults.items():
+            if getattr(self, name) is None:
+                object.__setattr__(self, name, default)
+        for name in ("event_type", "observed_at", "trace_id", "span_id", "source_event"):
+            object.__setattr__(self, name, _nonempty(getattr(self, name), name))
+        object.__setattr__(self, "event_type", _choice(self.event_type, EVENT_TYPES, "event_type"))
+        object.__setattr__(self, "budget_kind", _choice(self.budget_kind, BUDGET_KINDS, "budget_kind"))
+        object.__setattr__(self, "profile", _choice(self.profile, PROFILE_NAMES, "profile"))
+        object.__setattr__(self, "quality_risk", _choice(self.quality_risk, RISK_VALUES, "quality_risk"))
+        object.__setattr__(self, "mode", _choice(self.mode, RUNTIME_MODES, "mode"))
+        object.__setattr__(
+            self,
+            "failure_policy",
+            _choice(self.failure_policy, EVENT_FAILURE_POLICIES, "failure_policy"),
+        )
+        if self.progress is not None:
+            object.__setattr__(
+                self,
+                "progress",
+                _choice(self.progress, EVENT_PROGRESS_VALUES, "progress"),
+            )
+        for name in ("policy_allowed", "execution_allowed"):
+            object.__setattr__(
+                self,
+                name,
+                _optional_boolean(getattr(self, name), name),
+            )
+        for name in (
+            "parent_call_id",
+            "turn_id",
+            "parent_span_id",
+            "agent_id",
+            "tool_name",
+            "input_digest",
+            "reason_code",
+            "decision_reason",
+            "policy_version",
+            "pricing_version",
+            "error_type",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _nonempty(value, name))
+        if self.input_digest is not None and not _is_sha256_reference(self.input_digest):
+            raise ValueError("input_digest must be null or a SHA-256 reference")
+        if self.decision is not None:
+            object.__setattr__(self, "decision", _choice(self.decision, DECISION_VALUES, "decision"))
+        if self.status is not None:
+            object.__setattr__(self, "status", _choice(self.status, STATUS_VALUES, "status"))
+        for name in ("budget_before", "budget_after", "prompt_tokens", "completion_tokens", "total_tokens"):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative integer")
+        for name in (
+            "duration_ms",
+            "decision_latency_ms",
+            "execution_latency_ms",
+            "estimated_cost_usd",
+        ):
+            value = getattr(self, name)
+            if value is not None and (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(f"{name} must be a non-negative finite number")
+        if self.fingerprint_version is not None and (
+            not isinstance(self.fingerprint_version, int)
+            or isinstance(self.fingerprint_version, bool)
+            or self.fingerprint_version not in {1, FINGERPRINT_VERSION}
+        ):
+            raise ValueError(
+                f"fingerprint_version must be null, 1, or {FINGERPRINT_VERSION}"
+            )
+        if self.raw_input_stored is not False:
+            raise ValueError("raw_input_stored must be false")
+        if self.estimated_cost_usd is not None and self.pricing_version is None:
+            raise ValueError("pricing_version is required when estimated_cost_usd is set")
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version not in {1, 2}
+        ):
+            raise ValueError("schema_version must be the supported legacy version 1 or canonical version 2")
+        object.__setattr__(self, "schema_version", 2)
+        object.__setattr__(
+            self,
+            "metadata",
+            sanitize_metadata(
+                _json_object(self.metadata, "metadata"),
+                source=self.source,
+            ),
+        )
+        policy_facts = _policy_facts_copy(self.policy_facts)
+        object.__setattr__(
+            self,
+            "policy_facts",
+            None if policy_facts is None else MappingProxyType(policy_facts),
+        )
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "CallEvent":
+        """Copy every current field while rebuilding validated immutable facts."""
+        existing = memo.get(id(self))
+        if existing is not None:
+            return existing
+        copied = object.__new__(type(self))
+        memo[id(self)] = copied
+        for model_field in fields(self):
+            value = getattr(self, model_field.name)
+            if model_field.name == "policy_facts" and value is not None:
+                facts = _policy_facts_copy(copy.deepcopy(dict(value), memo))
+                copied_value = MappingProxyType(facts)
+            else:
+                copied_value = copy.deepcopy(value, memo)
+            object.__setattr__(copied, model_field.name, copied_value)
+        return copied
+
+    @classmethod
+    def create(cls, **values: Any) -> "CallEvent":
+        resolved = dict(values)
+        resolved["event_id"] = resolved.get("event_id", str(uuid.uuid4()))
+        resolved["occurred_at"] = resolved.get("occurred_at", utc_now())
+        resolved.setdefault("schema_version", 2)
+        if "fingerprint_version" not in resolved:
+            resolved["fingerprint_version"] = (
+                1 if resolved["schema_version"] == 1 else FINGERPRINT_VERSION
+            )
+        return cls(**resolved)
+
+    def to_dict(self) -> dict[str, Any]:
+        policy_facts = _validate_event_boundary(self)
+        return {
+            "schema_version": self.schema_version,
+            "event_id": self.event_id,
+            "session_id": self.session_id,
+            "call_id": self.call_id,
+            "parent_call_id": self.parent_call_id,
+            "phase": self.phase,
+            "occurred_at": self.occurred_at,
+            "objective": self.objective,
+            "route": self.route,
+            "fingerprint": self.fingerprint,
+            "budget_kind": self.budget_kind,
+            "profile": self.profile,
+            "risk": self.quality_risk,
+            "mode": self.mode,
+            "event_type": self.event_type,
+            "observed_at": self.observed_at,
+            "trace_id": self.trace_id,
+            "turn_id": self.turn_id,
+            "span_id": self.span_id,
+            "parent_span_id": self.parent_span_id,
+            "source_event": self.source_event,
+            "policy_allowed": self.policy_allowed,
+            "execution_allowed": self.execution_allowed,
+            "decision_reason": self.decision_reason,
+            "progress": self.progress,
+            "duration_ms": self.duration_ms,
+            "source": self.source,
+            "safe_metadata_json": _sanitized_event_metadata(self),
+            "error_type": self.error_type,
+            "agent_id": self.agent_id,
+            "tool_name": self.tool_name,
+            "input_digest": self.input_digest,
+            "fingerprint_version": self.fingerprint_version,
+            "failure_policy": self.failure_policy,
+            "decision": self.decision,
+            "reason_code": self.reason_code,
+            "policy_version": self.policy_version,
+            "budget_before": self.budget_before,
+            "budget_after": self.budget_after,
+            "decision_latency_ms": self.decision_latency_ms,
+            "execution_latency_ms": self.execution_latency_ms,
+            "status": self.status,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "estimated_cost_usd": self.estimated_cost_usd,
+            "pricing_version": self.pricing_version,
+            "raw_input_stored": self.raw_input_stored,
+            "policy_facts_json": policy_facts,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "CallEvent":
+        resolved = dict(value)
+        if "risk" in resolved:
+            risk = resolved.pop("risk")
+            if "quality_risk" in resolved and resolved["quality_risk"] != risk:
+                raise ValueError("risk and quality_risk must match when both are provided")
+            resolved.setdefault("quality_risk", risk)
+        if "safe_metadata_json" in resolved:
+            resolved.setdefault("metadata", resolved.pop("safe_metadata_json"))
+        if "policy_facts_json" in resolved:
+            resolved.setdefault("policy_facts", resolved.pop("policy_facts_json"))
+        return cls.create(**resolved)

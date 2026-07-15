@@ -1,4 +1,0 @@
-interface:
-  display_name: "Agent Call Governor"
-  short_description: "Govern prompt and runtime calls without sacrificing quality"
-  default_prompt: "Use $agent-call-governor in balanced mode to complete this task with the minimum sufficient delegation."

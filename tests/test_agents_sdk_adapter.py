@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import tempfile
@@ -179,7 +180,10 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         events = self.ledger.events("sdk-hooks-session")
         self.assertEqual(sum(event.phase == "started" for event in events), 4)
         self.assertEqual(sum(event.phase == "completed" for event in events), 4)
-        self.assertTrue(any(event.metadata.get("sdk_event") == "handoff" for event in events))
+        key = "custom:" + hashlib.sha256(b"sdk_event").hexdigest()
+        value = "sha256:" + hashlib.sha256(b"handoff").hexdigest()
+        self.assertTrue(any(event.metadata.get(key) == value for event in events))
+        self.assertTrue(all("sdk_event" not in event.metadata for event in events))
         serialized = json.dumps([event.to_dict() for event in events])
         for secret in (
             "secret system prompt",
@@ -222,8 +226,15 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         self.assertEqual(allowed.behavior["type"], "allow")
         self.assertEqual(blocked.behavior["type"], "reject_content")
         self.assertEqual(
-            [event.phase for event in self.ledger.events("guardrail-session")],
-            ["proposed", "started", "proposed", "blocked"],
+            [event.event_type for event in self.ledger.events("guardrail-session")],
+            [
+                "call.proposed",
+                "policy.decided",
+                "call.started",
+                "call.proposed",
+                "policy.decided",
+                "call.blocked",
+            ],
         )
         persisted = (Path(self.tempdir.name) / "events.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("secret@example.com", persisted)
@@ -286,7 +297,10 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         asyncio.run(exercise())
 
         events = self.ledger.events("no-tool-id")
-        self.assertEqual([event.phase for event in events], ["proposed", "started", "completed"])
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
+        )
         self.assertNotIn("private result", json.dumps([event.to_dict() for event in events]))
 
     @unittest.skipUnless(SDK_AVAILABLE, "openai-agents optional extra is not installed")

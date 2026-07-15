@@ -2,7 +2,7 @@
 set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-SOURCE="$SCRIPT_DIR/agent-call-governor"
+SOURCE="$SCRIPT_DIR/skills/agent-call-governor"
 CODEX_ROOT=${CODEX_HOME:-"$HOME/.codex"}
 DESTINATION="$CODEX_ROOT/skills/agent-call-governor"
 

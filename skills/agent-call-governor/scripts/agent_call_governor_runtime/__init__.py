@@ -6,8 +6,17 @@ from .agents_sdk import (
     build_function_tool_guardrail,
     build_run_hooks,
 )
-from .ledger import CallLedger
-from .models import CallEvent, CallHandle, CallProposal, RuntimeDecision
+from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerprint
+from .ledger import CallLedger, SecureCleanupIncompleteError
+from .models import (
+    CallEvent,
+    CallHandle,
+    CallProposal,
+    DoctorCheck,
+    RuntimeDecision,
+    SessionSummary,
+    build_policy_facts,
+)
 from .policy import evaluate, fingerprint
 from .runtime import GovernedRuntime, GovernanceBlocked, GovernanceError, GovernanceInternalError
 
@@ -16,16 +25,23 @@ __all__ = [
     "CallHandle",
     "CallLedger",
     "CallProposal",
+    "DoctorCheck",
+    "FINGERPRINT_VERSION",
+    "FingerprintResult",
     "GovernedRuntime",
     "GovernedRunner",
     "GovernanceBlocked",
     "GovernanceError",
     "GovernanceInternalError",
     "RuntimeDecision",
+    "SecureCleanupIncompleteError",
+    "SessionSummary",
     "SDKHookCall",
     "build_function_tool_guardrail",
+    "build_fingerprint",
+    "build_policy_facts",
     "build_run_hooks",
     "evaluate",
     "fingerprint",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

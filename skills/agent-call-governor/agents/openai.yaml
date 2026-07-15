@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Call Governor"
+  short_description: "Govern calls and inspect local Codex activity"
+  default_prompt: "Use $agent-call-governor to choose minimum sufficient calls, preserve quality, and inspect local plugin activity when needed."

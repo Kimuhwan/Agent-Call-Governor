@@ -154,14 +154,14 @@ class RuntimeCLITests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(
             [
-                event.phase
+                event.event_type
                 for event in CallLedger(hook_db).events(
-                    "codex:session:"
+                    "codex:trace:"
                     f"{hashlib.sha256(b'session-1').hexdigest()}:turn:"
                     f"{hashlib.sha256(b'turn-1').hexdigest()}"
                 )
             ],
-            ["proposed", "started"],
+            ["call.proposed", "policy.decided", "call.started"],
         )
 
     def test_runtime_eval_has_at_least_sixty_variants(self) -> None:
@@ -169,6 +169,129 @@ class RuntimeCLITests(unittest.TestCase):
         self.assertIsInstance(cases, list)
         self.assertGreaterEqual(len(cases), 60)
         self.assertEqual(len({case["name"] for case in cases}), len(cases))
+
+    def test_instrumentation_pilot_has_ten_unique_cases_and_passes(self) -> None:
+        cases = json.loads(
+            (ROOT / "evals" / "instrumentation_tasks.json").read_text(encoding="utf-8")
+        )
+        self.assertIsInstance(cases, list)
+        self.assertEqual(len(cases), 10)
+
+        required_keys = {"name", "expected", "test_id"}
+        for case in cases:
+            with self.subTest(case=case):
+                self.assertIsInstance(case, dict)
+                self.assertEqual(set(case), required_keys)
+                for key in required_keys:
+                    self.assertIsInstance(case[key], str)
+                    self.assertTrue(case[key].strip())
+
+        names = [case["name"] for case in cases]
+        test_ids = [case["test_id"] for case in cases]
+        self.assertEqual(len(set(names)), 10)
+        self.assertEqual(len(set(test_ids)), 10)
+
+        for test_id in test_ids:
+            with self.subTest(test_id=test_id):
+                loader = unittest.TestLoader()
+                suite = loader.loadTestsFromName(test_id)
+                self.assertEqual(loader.errors, [])
+                self.assertEqual(suite.countTestCases(), 1)
+
+                selected_result = unittest.TestResult()
+                suite.run(selected_result)
+                self.assertEqual(selected_result.testsRun, 1)
+                self.assertEqual(selected_result.skipped, [])
+                self.assertEqual(selected_result.failures, [])
+                self.assertEqual(selected_result.errors, [])
+                self.assertEqual(selected_result.expectedFailures, [])
+
+        from evals.run_instrumentation_evals import run
+
+        result = run()
+
+        self.assertEqual(result["total"], 10)
+        self.assertEqual(result["passed"], 10)
+        self.assertEqual(result["failures"], [])
+
+    def test_instrumentation_renderer_reads_powershell_utf16_json(self) -> None:
+        from evals.run_instrumentation_evals import load_cases, load_measured_json
+
+        records = []
+        for case in load_cases():
+            records.append(
+                {
+                    **case,
+                    "passed": True,
+                    "elapsed_ms": 1.0,
+                    "detail": (
+                        f"expected_contract={case['expected']}; test_result=pass; "
+                        f"test={case['test_id']}; "
+                        "elapsed_ms=1.000"
+                    ),
+                    "failure_type": None,
+                }
+            )
+        measured = {"total": 10, "passed": 10, "failures": [], "results": records}
+        powershell_output = self.root / "instrumentation.json"
+        powershell_output.write_bytes(json.dumps(measured).encode("utf-16"))
+
+        self.assertEqual(load_measured_json(powershell_output), measured)
+
+    def test_instrumentation_markdown_excludes_local_debug_text(self) -> None:
+        from evals.run_instrumentation_evals import load_cases, render_markdown
+
+        records = []
+        for case in load_cases():
+            records.append(
+                {
+                    **case,
+                    "passed": True,
+                    "elapsed_ms": 1.0,
+                    "detail": (
+                        f"expected_contract={case['expected']}; test_result=pass; "
+                        f"test={case['test_id']}; "
+                        "elapsed_ms=1.000"
+                    ),
+                    "failure_type": None,
+                }
+            )
+        records[0].update(
+            {
+                "passed": False,
+                "detail": "unsafe local diagnostic",
+                "failure_type": "TestError",
+                "debug": r"C:\Users\secret\workspace API_TOKEN=do-not-publish",
+            }
+        )
+        measured = {
+            "total": 10,
+            "passed": 9,
+            "failures": [records[0]["name"]],
+            "results": records,
+        }
+
+        markdown = render_markdown(measured, commit_sha="a" * 40)
+
+        self.assertNotIn("API_TOKEN", markdown)
+        self.assertNotIn(r"C:\Users\secret", markdown)
+        self.assertNotIn("observed=", markdown)
+        self.assertIn("test_result=pass", markdown)
+        self.assertIn("TestError", markdown)
+        self.assertIn(
+            "This pilot tests instrumentation and deterministic governance accuracy; "
+            "it does not measure model response quality.",
+            markdown,
+        )
+
+    def test_instrumentation_expected_failure_is_not_a_pass(self) -> None:
+        from evals.run_instrumentation_evals import _failure_type
+
+        result = unittest.TestResult()
+        result.testsRun = 1
+        result.expectedFailures.append((self, "expected failure traceback"))
+
+        self.assertEqual(_failure_type(result), "ExpectedFailure")
 
     def test_runtime_eval_preserves_needed_calls_and_blocks_waste(self) -> None:
         from evals.run_runtime_evals import run

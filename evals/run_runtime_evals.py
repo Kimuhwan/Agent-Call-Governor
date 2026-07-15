@@ -80,7 +80,12 @@ def run() -> dict[str, Any]:
                         progress=step.get("progress", "material_progress"),
                     )
                     executed_total += 1
-                    reason = ledger.events(name)[-1].decision_reason or ""
+                    decision_event = next(
+                        event
+                        for event in reversed(ledger.events(name))
+                        if event.event_type == "policy.decided"
+                    )
+                    reason = decision_event.reason_code or ""
                 except GovernanceBlocked as exc:
                     actual = "block"
                     blocked_total += 1

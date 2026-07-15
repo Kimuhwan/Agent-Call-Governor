@@ -58,7 +58,7 @@ Profiles remain separate: `strict`, `balanced`, and `quality-first`. Internal po
 
 `codex_hook.py` reads official Codex command-hook JSON from stdin and writes lifecycle events for `PreToolUse`, `PostToolUse`, `SubagentStart`, and `SubagentStop`. It tolerates additional fields so later Codex versions do not break parsing, treats repeated delivery of one host call ID as idempotent, hashes host session/turn/call IDs before persistence, and scopes policy history to `turn_id` (or the individual call when no turn ID exists) rather than one long-lived Codex session.
 
-Current Codex hooks do not provide a supported veto for these events: `PreToolUse` does not accept the common stop fields, and `SubagentStart` explicitly ignores `continue: false`. Therefore the adapter supports `observe` and `warn` only and emits a `systemMessage` when policy would reject a call. A generated example hook file is opt-in because Codex requires users to review and trust hook definitions.
+Compatibility update (2026-07-15): the host supports denial for a supported `PreToolUse` call through `hookSpecificOutput.permissionDecision: "deny"`; `SubagentStart` still does not provide the same boundary. The adapter defined here deliberately does not emit the denial shape, supports `observe` and `warn` only, and emits a `systemMessage` when policy would reject a call. A generated example hook file is opt-in because Codex requires users to review and trust the current exact hook hash.
 
 ### OpenAI Agents SDK adapter
 

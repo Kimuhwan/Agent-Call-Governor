@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).parents[1] / "agent-call-governor" / "scripts" / "governor.py"
+SCRIPT = Path(__file__).parents[1] / "skills" / "agent-call-governor" / "scripts" / "governor.py"
 sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("governor", SCRIPT)
 assert SPEC and SPEC.loader
@@ -90,6 +90,49 @@ class GovernorTests(unittest.TestCase):
         })
         self.assertFalse(result["allowed"])
         self.assertEqual(result["reason"], "duplicate_fingerprint")
+
+    def test_explicit_v2_history_fingerprint_blocks_duplicate(self):
+        current = proposal()
+        result = governor.evaluate({
+            "proposal": current,
+            "history": [{
+                "fingerprint": governor.fingerprint(current),
+                "fingerprint_version": 2,
+                "progress": "material_progress",
+            }],
+        })
+        self.assertFalse(result["allowed"])
+        self.assertEqual(result["reason"], "duplicate_fingerprint")
+
+    def test_legacy_v1_fingerprint_consumes_budget_without_blocking_as_v2_duplicate(self):
+        current = proposal()
+        result = governor.evaluate({
+            "proposal": current,
+            "history": [{
+                "fingerprint": governor.fingerprint(current),
+                "fingerprint_version": 1,
+                "budget_kind": "agent",
+                "progress": "material_progress",
+            }],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["reason"], "allowed")
+        self.assertEqual(result["matching_history_count"], 1)
+        self.assertEqual(result["remaining_after_call"], 0)
+
+    def test_other_budget_kind_does_not_participate_in_duplicate_or_progress_rules(self):
+        current = proposal()
+        result = governor.evaluate({
+            "proposal": current,
+            "history": [{
+                "fingerprint": governor.fingerprint(current),
+                "fingerprint_version": 2,
+                "budget_kind": "direct-tool",
+                "progress": "sufficient",
+            }],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["matching_history_count"], 0)
 
     def test_duplicate_precedes_mandatory_exception(self):
         current = proposal(mandatory_reason="user_requested_action")
@@ -195,6 +238,39 @@ class GovernorTests(unittest.TestCase):
         })
         self.assertEqual(result["matching_history_count"], 1)
         self.assertTrue(result["allowed"])
+
+    def test_unknown_progress_consumes_budget_without_triggering_a_stop_rule(self):
+        result = governor.evaluate({
+            "proposal": proposal(route="different-agent"),
+            "profile": "balanced",
+            "budget": {"limit": 2},
+            "history": [{"budget_kind": "agent", "progress": "unknown"}],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["reason"], "allowed")
+        self.assertEqual(result["matching_history_count"], 1)
+        self.assertEqual(result["remaining_after_call"], 0)
+
+    def test_unknown_progress_is_filtered_only_from_actionable_stop_rules(self):
+        cases = (
+            ("sufficient", "stop_condition_already_satisfied"),
+            ("no_progress", "no_progress_stop"),
+            ("low_progress", "changed_strategy_required"),
+        )
+        for progress, expected_reason in cases:
+            with self.subTest(progress=progress):
+                result = governor.evaluate({
+                    "proposal": proposal(route=f"route-{progress}"),
+                    "profile": "quality-first",
+                    "budget": {"limit": 10},
+                    "history": [
+                        {"budget_kind": "agent", "progress": progress},
+                        {"budget_kind": "agent", "progress": "unknown"},
+                    ],
+                })
+                self.assertFalse(result["allowed"])
+                self.assertEqual(result["reason"], expected_reason)
+                self.assertEqual(result["matching_history_count"], 2)
 
     def test_quality_first_allows_two_changed_strategy_retries(self):
         result = governor.evaluate({

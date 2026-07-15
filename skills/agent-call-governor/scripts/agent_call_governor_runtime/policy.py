@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
+
+from .fingerprint import FINGERPRINT_VERSION, build_fingerprint
 
 
-PROGRESS_VALUES = {"sufficient", "material_progress", "low_progress", "no_progress"}
+PROGRESS_VALUES = {
+    "unknown",
+    "sufficient",
+    "material_progress",
+    "low_progress",
+    "no_progress",
+}
 PROFILE_NAMES = {"strict", "balanced", "quality-first"}
 RISK_VALUES = {"low", "medium", "high"}
 BUDGET_KINDS = {"agent", "direct-tool"}
@@ -48,22 +55,41 @@ REQUIRED_FIELDS = (
     "expected_new_information",
     "stop_condition",
 )
+POLICY_VERSION = "2026-07-14.1"
+POLICY_REASON_CODES = frozenset({
+    "allowed",
+    "duplicate_fingerprint",
+    "mandatory_exception",
+    "stop_condition_already_satisfied",
+    "no_progress_stop",
+    "low_progress_retry_exhausted",
+    "changed_strategy_required",
+    "budget_exhausted",
+})
+POLICY_ALLOW_REASON_CODES = frozenset({"allowed", "mandatory_exception"})
+POLICY_CONTEXT_FIELDS = frozenset({
+    "profile",
+    "quality_risk",
+    "budget_kind",
+    "effective_limit",
+    "budget_floor_applied",
+    "matching_history_count",
+    "mandatory_reason",
+})
 
 
 def fingerprint(proposal: dict[str, Any]) -> str:
-    identity = {
-        "objective": proposal.get("objective", ""),
-        "route": proposal.get("route", ""),
-        "material_inputs": proposal.get("material_inputs", {}),
-    }
-    canonical = json.dumps(
-        identity,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    metadata = proposal.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return build_fingerprint(
+        objective=proposal.get("objective", ""),
+        route=proposal.get("route", ""),
+        material_inputs=proposal.get("material_inputs", {}),
+        cwd=proposal.get("cwd", metadata.get("cwd")),
+        tool_version=proposal.get("tool_version", metadata.get("tool_version")),
+        state_token=proposal.get("state_token", metadata.get("state_token")),
+    ).digest
 
 
 def _nonempty(value: Any) -> bool:
@@ -75,6 +101,26 @@ def _enum(value: Any, allowed: set[str], field: str) -> str:
         choices = ", ".join(sorted(allowed))
         raise ValueError(f"{field} must be one of: {choices}")
     return value
+
+
+def validate_policy_context(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact built-in, privacy-safe policy decision context."""
+    if not isinstance(value, Mapping) or set(value) != POLICY_CONTEXT_FIELDS:
+        raise ValueError("policy result context must contain only canonical fields")
+    context = dict(value)
+    _enum(context["profile"], PROFILE_NAMES, "policy context profile")
+    _enum(context["quality_risk"], RISK_VALUES, "policy context quality_risk")
+    _enum(context["budget_kind"], BUDGET_KINDS, "policy context budget_kind")
+    for name in ("effective_limit", "matching_history_count"):
+        field_value = context[name]
+        if type(field_value) is not int or field_value < 0:
+            raise ValueError(f"policy context {name} must be a non-negative integer")
+    if type(context["budget_floor_applied"]) is not bool:
+        raise ValueError("policy context budget_floor_applied must be a boolean")
+    mandatory_reason = context["mandatory_reason"]
+    if mandatory_reason is not None:
+        _enum(mandatory_reason, MANDATORY_REASONS, "policy context mandatory_reason")
+    return context
 
 
 def evaluate(document: dict[str, Any]) -> dict[str, Any]:
@@ -121,10 +167,14 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
         )
         if entry_budget_kind == budget_kind:
             matching_history_count += 1
-        if isinstance(entry.get("fingerprint"), str):
-            seen.add(entry["fingerprint"])
-        if "progress" in entry:
-            progress.append(_enum(entry["progress"], PROGRESS_VALUES, "history.progress"))
+            fingerprint_version_matches = (
+                "fingerprint_version" not in entry
+                or entry["fingerprint_version"] == FINGERPRINT_VERSION
+            )
+            if fingerprint_version_matches and isinstance(entry.get("fingerprint"), str):
+                seen.add(entry["fingerprint"])
+            if "progress" in entry:
+                progress.append(_enum(entry["progress"], PROGRESS_VALUES, "history.progress"))
 
     used = budget.get("used", matching_history_count)
     if not isinstance(used, int):
@@ -135,6 +185,7 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("budget.used cannot be lower than matching history count")
 
     remaining = max(effective_limit - used, 0)
+    actionable_progress = [value for value in progress if value != "unknown"]
     context = {
         "profile": profile,
         "quality_risk": quality_risk,
@@ -149,17 +200,21 @@ def evaluate(document: dict[str, Any]) -> dict[str, Any]:
         return _decision(False, "duplicate_fingerprint", current, remaining, context)
     if mandatory_reason:
         return _decision(True, "mandatory_exception", current, max(remaining - 1, 0), context)
-    if "sufficient" in progress:
+    if "sufficient" in actionable_progress:
         return _decision(False, "stop_condition_already_satisfied", current, remaining, context)
-    if progress and progress[-1] == "no_progress":
+    if actionable_progress and actionable_progress[-1] == "no_progress":
         return _decision(False, "no_progress_stop", current, remaining, context)
 
-    low_progress_count = progress.count("low_progress")
+    low_progress_count = actionable_progress.count("low_progress")
     risk_retry_floor = 1 if quality_risk == "high" else 0
     allowed_retries = max(PROFILE_LIMITS[profile]["low_progress_retries"], risk_retry_floor)
     if low_progress_count > allowed_retries:
         return _decision(False, "low_progress_retry_exhausted", current, remaining, context)
-    if progress and progress[-1] == "low_progress" and not _nonempty(proposal.get("changed_strategy")):
+    if (
+        actionable_progress
+        and actionable_progress[-1] == "low_progress"
+        and not _nonempty(proposal.get("changed_strategy"))
+    ):
         return _decision(False, "changed_strategy_required", current, remaining, context)
     if used >= effective_limit:
         return _decision(False, "budget_exhausted", current, remaining, context)

@@ -1,6 +1,7 @@
 *.egg-info/
 .tmp/
 .tools/
+.worktrees/
 build/
 dist/
 __pycache__/

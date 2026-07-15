@@ -1,0 +1,27 @@
+{
+  "name": "agent-call-governor",
+  "version": "0.3.0",
+  "description": "Local-first observe/warn call governance and observability for Codex.",
+  "author": {
+    "name": "Kimuhwan",
+    "url": "https://github.com/Kimuhwan"
+  },
+  "homepage": "https://github.com/Kimuhwan/Agent-Call-Governor",
+  "repository": "https://github.com/Kimuhwan/Agent-Call-Governor",
+  "license": "MIT",
+  "keywords": ["codex", "governance", "observability", "hooks"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Call Governor",
+    "shortDescription": "Observe and warn on Codex calls locally",
+    "longDescription": "Local-first Codex call observability with deterministic, quality-preserving observe/warn policy decisions.",
+    "developerName": "Kimuhwan",
+    "category": "Productivity",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/Kimuhwan/Agent-Call-Governor",
+    "defaultPrompt": [
+      "Use Agent Call Governor to inspect this task's call plan.",
+      "Show my local Agent Call Governor session summary."
+    ]
+  }
+}

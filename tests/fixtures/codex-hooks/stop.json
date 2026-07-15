@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "Stop",
+  "session_id": "private-session-id",
+  "turn_id": "private-turn-id",
+  "cwd": "C:/Users/Ada/private-repo",
+  "stop_hook_active": false
+}
