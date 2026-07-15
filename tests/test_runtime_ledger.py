@@ -145,6 +145,7 @@ class RuntimeLedgerTests(unittest.TestCase):
                     "fingerprint": digest_reference("fp-1"),
                     "fingerprint_version": 2,
                     "budget_kind": "agent",
+                    "progress": "unknown",
                 }
             ],
         )
@@ -880,6 +881,30 @@ class RuntimeLedgerTests(unittest.TestCase):
             self.ledger.history("session-1")[0]["progress"],
             "material_progress",
         )
+
+    def test_late_proposal_block_and_cancellation_do_not_release_consumed_call(self):
+        self.ledger.append(self.event("started", call_id="logical-call"))
+        self.ledger.append(
+            self.event(
+                "completed",
+                call_id="logical-call",
+                progress="unknown",
+            )
+        )
+        self.ledger.append(self.event("proposed", call_id="logical-call"))
+        self.ledger.append(self.event("blocked", call_id="logical-call"))
+        self.ledger.append(
+            self.event(
+                "cancelled",
+                call_id="logical-call",
+                progress="unknown",
+            )
+        )
+
+        history = self.ledger.history("session-1")
+
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["progress"], "unknown")
 
     def test_sessions_are_isolated(self):
         self.ledger.append(self.event("started", session_id="session-1"))

@@ -17,6 +17,7 @@ from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerpri
 from .policy import (
     BUDGET_KINDS,
     MANDATORY_REASONS,
+    POLICY_CONTEXT_FIELDS,
     PROFILE_NAMES,
     PROGRESS_VALUES,
     RISK_VALUES,
@@ -301,6 +302,11 @@ def _validate_event_boundary(event: "CallEvent") -> dict[str, Any] | None:
         raise ValueError("pricing_version is required when estimated_cost_usd is set")
     if event.raw_input_stored is not False:
         raise ValueError("raw_input_stored must be false")
+    if (
+        event.event_type != "policy.decided"
+        and set(event.metadata) & POLICY_CONTEXT_FIELDS
+    ):
+        raise ValueError("policy context is allowed only on policy.decided")
     _json_object(event.metadata, "metadata")
     return _policy_facts_copy(event.policy_facts)
 
@@ -326,6 +332,8 @@ class CallProposal:
     changed_strategy: str | None = None
     parent_call_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    trace_id: str | None = None
+    turn_id: str | None = None
     _fingerprint_result: FingerprintResult = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -355,6 +363,12 @@ class CallProposal:
             object.__setattr__(self, "changed_strategy", _nonempty(self.changed_strategy, "changed_strategy"))
         if self.parent_call_id is not None:
             object.__setattr__(self, "parent_call_id", _nonempty(self.parent_call_id, "parent_call_id"))
+        if self.trace_id is None:
+            object.__setattr__(self, "trace_id", self.session_id)
+        else:
+            object.__setattr__(self, "trace_id", _nonempty(self.trace_id, "trace_id"))
+        if self.turn_id is not None:
+            object.__setattr__(self, "turn_id", _nonempty(self.turn_id, "turn_id"))
         object.__setattr__(self, "material_inputs", _json_object(self.material_inputs, "material_inputs"))
         object.__setattr__(self, "metadata", _json_object(self.metadata, "metadata"))
         object.__setattr__(
@@ -413,6 +427,29 @@ class CallProposal:
         }
 
 
+def build_policy_facts(proposal: CallProposal) -> dict[str, Any]:
+    """Build the exact privacy-safe proposal facts persisted for replay analysis."""
+    result = proposal.fingerprint_result
+    return {
+        "fingerprint": result.digest,
+        "fingerprint_version": result.version,
+        "budget_kind": proposal.budget_kind,
+        "requested_budget_limit": proposal.budget_limit,
+        "profile": proposal.profile,
+        "risk": proposal.quality_risk,
+        "mandatory_reason": proposal.mandatory_reason,
+        "changed_strategy_present": proposal.changed_strategy is not None,
+        "required_fields_present": all((
+            bool(proposal.capability_gap),
+            bool(proposal.expected_new_information),
+            bool(proposal.stop_condition),
+        )),
+        "duplicate_scope": "turn",
+        "state_token_digest": result.state_token_digest,
+        "policy_facts_version": POLICY_FACTS_VERSION,
+    }
+
+
 @dataclass(frozen=True)
 class RuntimeDecision:
     policy_allowed: bool
@@ -421,6 +458,47 @@ class RuntimeDecision:
     fingerprint: str
     remaining_after_call: int | None = None
     context: Mapping[str, Any] = field(default_factory=dict)
+    budget_before: int | None = None
+    budget_after: int | None = None
+    decision_latency_ms: float | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("policy_allowed", "execution_allowed"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be a boolean")
+        object.__setattr__(self, "reason", _nonempty(self.reason, "reason"))
+        if not (
+            _is_sha256_reference(self.fingerprint)
+            or _is_bare_sha256_digest(self.fingerprint)
+        ):
+            raise ValueError(
+                "fingerprint must be a SHA-256 reference or released v1 bare digest"
+            )
+        for name in ("remaining_after_call", "budget_before", "budget_after"):
+            value = getattr(self, name)
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError(f"{name} must be a non-negative integer or null")
+        if (
+            self.remaining_after_call is not None
+            and self.budget_after is not None
+            and self.remaining_after_call != self.budget_after
+        ):
+            raise ValueError("remaining_after_call and budget_after must match")
+        resolved_budget_after = (
+            self.budget_after
+            if self.budget_after is not None
+            else self.remaining_after_call
+        )
+        object.__setattr__(self, "budget_after", resolved_budget_after)
+        object.__setattr__(self, "remaining_after_call", resolved_budget_after)
+        if self.decision_latency_ms is not None and (
+            not isinstance(self.decision_latency_ms, (int, float))
+            or isinstance(self.decision_latency_ms, bool)
+            or not math.isfinite(self.decision_latency_ms)
+            or self.decision_latency_ms < 0
+        ):
+            raise ValueError("decision_latency_ms must be a non-negative finite number or null")
+        object.__setattr__(self, "context", _json_object(self.context, "context"))
 
 
 @dataclass(frozen=True)

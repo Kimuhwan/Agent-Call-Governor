@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import sqlite3
 import sys
@@ -49,7 +48,10 @@ class GovernedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result, "ok")
         events = self.ledger.events("session-1")
-        self.assertEqual([event.phase for event in events], ["proposed", "started", "completed"])
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
+        )
         self.assertEqual(events[-1].progress, "sufficient")
         self.assertIsNotNone(events[-1].duration_ms)
         self.assertEqual(events[-1].mode, "observe")
@@ -243,8 +245,8 @@ class GovernedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(result, "executed")
         self.assertEqual(
-            [event.phase for event in ledger.events("session-1")],
-            ["proposed", "started", "completed"],
+            [event.event_type for event in ledger.events("session-1")],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
         )
 
     def test_application_exception_is_recorded_and_reraised(self):
@@ -360,8 +362,8 @@ class GovernedRuntimeTests(unittest.TestCase):
 
         self.assertEqual(executed, [])
         self.assertEqual(
-            [event.phase for event in self.ledger.events("session-1")],
-            ["proposed", "started", "cancelled"],
+            [event.event_type for event in self.ledger.events("session-1")],
+            ["call.proposed", "policy.decided", "call.started", "call.cancelled"],
         )
         self.assertEqual(self.ledger.history("session-1"), [])
 
@@ -396,8 +398,8 @@ class GovernedRuntimeTests(unittest.TestCase):
             asyncio.run(scenario())
 
         self.assertEqual(
-            [event.phase for event in ledger.events("session-1")],
-            ["proposed", "started", "completed"],
+            [event.event_type for event in ledger.events("session-1")],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
         )
 
     def test_fail_open_executes_when_policy_evaluation_crashes(self):
@@ -414,12 +416,12 @@ class GovernedRuntimeTests(unittest.TestCase):
         result = runtime.run(self.proposal(), lambda: "fallback")
 
         self.assertEqual(result, "fallback")
-        proposed = self.ledger.events("session-1")[0]
-        self.assertEqual(proposed.decision_reason, "internal_error_fail_open")
-        key = "custom:" + hashlib.sha256(b"internal_error_type").hexdigest()
-        value = "sha256:" + hashlib.sha256(b"RuntimeError").hexdigest()
-        self.assertEqual(proposed.metadata, {key: value})
-        encoded_metadata = json.dumps(proposed.metadata, sort_keys=True)
+        events = self.ledger.events("session-1")
+        decision_event = events[1]
+        self.assertEqual(decision_event.decision_reason, "internal_error_fail_open")
+        self.assertEqual(decision_event.decision, "internal_error")
+        self.assertEqual(decision_event.metadata, {})
+        encoded_metadata = json.dumps(decision_event.metadata, sort_keys=True)
         self.assertNotIn("internal_error_type", encoded_metadata)
         self.assertNotIn("RuntimeError", encoded_metadata)
 
@@ -460,19 +462,26 @@ class GovernedRuntimeTests(unittest.TestCase):
 
                 if failure_policy == "fail-open":
                     self.assertEqual(runtime.run(proposal, lambda: "fallback"), "fallback")
-                    expected_phases = ["proposed", "started", "completed"]
+                    expected_types = [
+                        "call.proposed",
+                        "policy.decided",
+                        "call.started",
+                        "call.completed",
+                    ]
                 else:
                     with self.assertRaisesRegex(GovernanceBlocked, "internal_error_fail_closed"):
                         runtime.run(proposal, lambda: "must-not-run")
-                    expected_phases = ["proposed", "blocked"]
+                    expected_types = [
+                        "call.proposed",
+                        "policy.decided",
+                        "call.blocked",
+                    ]
 
                 events = self.ledger.events(session_id)
-                self.assertEqual([event.phase for event in events], expected_phases)
+                self.assertEqual([event.event_type for event in events], expected_types)
                 self.assertTrue(all(event.fingerprint == expected_fingerprint for event in events))
-                key = "custom:" + hashlib.sha256(b"internal_error_type").hexdigest()
-                value = "sha256:" + hashlib.sha256(b"RuntimeError").hexdigest()
-                for event in events[:2]:
-                    self.assertEqual(event.metadata[key], value)
+                self.assertEqual(events[1].metadata, {})
+                for event in events:
                     encoded_metadata = json.dumps(event.metadata, sort_keys=True)
                     self.assertNotIn("internal_error_type", encoded_metadata)
                     self.assertNotIn("RuntimeError", encoded_metadata)

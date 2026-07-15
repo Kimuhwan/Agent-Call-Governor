@@ -8,7 +8,14 @@ from .agents_sdk import (
 )
 from .fingerprint import FINGERPRINT_VERSION, FingerprintResult, build_fingerprint
 from .ledger import CallLedger, SecureCleanupIncompleteError
-from .models import CallEvent, CallHandle, CallProposal, RuntimeDecision, SessionSummary
+from .models import (
+    CallEvent,
+    CallHandle,
+    CallProposal,
+    RuntimeDecision,
+    SessionSummary,
+    build_policy_facts,
+)
 from .policy import evaluate, fingerprint
 from .runtime import GovernedRuntime, GovernanceBlocked, GovernanceError, GovernanceInternalError
 
@@ -30,6 +37,7 @@ __all__ = [
     "SDKHookCall",
     "build_function_tool_guardrail",
     "build_fingerprint",
+    "build_policy_facts",
     "build_run_hooks",
     "evaluate",
     "fingerprint",

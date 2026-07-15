@@ -52,7 +52,10 @@ class CodexHookTests(unittest.TestCase):
         self.assertIsNone(handle_codex_hook(load_fixture("post_tool_use.json"), runtime))
 
         events = self.ledger.events(scope_id("turn-1"))
-        self.assertEqual([event.phase for event in events], ["proposed", "started", "completed"])
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
+        )
         self.assertEqual(events[-1].progress, "material_progress")
         self.assertEqual(events[-1].budget_kind, "direct-tool")
         persisted = (Path(self.tempdir.name) / "events.jsonl").read_text(encoding="utf-8")
@@ -83,8 +86,8 @@ class CodexHookTests(unittest.TestCase):
         self.assertIsNone(handle_codex_hook(payload, runtime))
 
         self.assertEqual(
-            [event.phase for event in self.ledger.events(scope_id("turn-1"))],
-            ["proposed", "started"],
+            [event.event_type for event in self.ledger.events(scope_id("turn-1"))],
+            ["call.proposed", "policy.decided", "call.started"],
         )
 
     def test_concurrent_replayed_start_delivery_is_idempotent(self) -> None:
@@ -121,8 +124,8 @@ class CodexHookTests(unittest.TestCase):
 
         self.assertEqual(outcomes, [None, None])
         self.assertEqual(
-            [event.phase for event in ledger.events(scope_id("turn-1"))],
-            ["proposed", "started"],
+            [event.event_type for event in ledger.events(scope_id("turn-1"))],
+            ["call.proposed", "policy.decided", "call.started"],
         )
 
     def test_concurrent_replayed_terminal_delivery_is_idempotent(self) -> None:
@@ -162,8 +165,8 @@ class CodexHookTests(unittest.TestCase):
 
         self.assertEqual(outcomes, [None, None])
         self.assertEqual(
-            [event.phase for event in ledger.events(scope_id("turn-1"))],
-            ["proposed", "started", "completed"],
+            [event.event_type for event in ledger.events(scope_id("turn-1"))],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
         )
 
     def test_policy_scope_resets_for_a_new_codex_turn(self) -> None:
@@ -291,7 +294,7 @@ class CodexHookTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.assertEqual(result.stdout, b"")
-        self.assertEqual(len(CallLedger(db_path).events(scope_id("turn-1"))), 2)
+        self.assertEqual(len(CallLedger(db_path).events(scope_id("turn-1"))), 3)
 
 
 if __name__ == "__main__":

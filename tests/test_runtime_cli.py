@@ -154,14 +154,14 @@ class RuntimeCLITests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertEqual(
             [
-                event.phase
+                event.event_type
                 for event in CallLedger(hook_db).events(
                     "codex:session:"
                     f"{hashlib.sha256(b'session-1').hexdigest()}:turn:"
                     f"{hashlib.sha256(b'turn-1').hexdigest()}"
                 )
             ],
-            ["proposed", "started"],
+            ["call.proposed", "policy.decided", "call.started"],
         )
 
     def test_runtime_eval_has_at_least_sixty_variants(self) -> None:

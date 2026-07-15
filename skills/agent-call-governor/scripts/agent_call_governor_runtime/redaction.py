@@ -8,6 +8,14 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from .policy import (
+    BUDGET_KINDS,
+    MANDATORY_REASONS,
+    POLICY_CONTEXT_FIELDS,
+    PROFILE_NAMES,
+    RISK_VALUES,
+)
+
 
 SAFE_METADATA_BY_SOURCE = {
     "runtime": frozenset({"cancelled_before_execution", "exit_code", "file_changed", "test_status"}),
@@ -20,13 +28,21 @@ SAFE_METADATA_BY_SOURCE = {
 }
 SAFE_ENUMS = {
     "acceptance_criterion_status": frozenset({"satisfied", "not_satisfied", "unknown"}),
+    "budget_kind": frozenset(BUDGET_KINDS),
+    "mandatory_reason": frozenset(MANDATORY_REASONS),
+    "profile": frozenset(PROFILE_NAMES),
+    "quality_risk": frozenset(RISK_VALUES),
     "test_status": frozenset({"passed", "failed", "unknown"}),
 }
+SAFE_NULLABLE_ENUMS = frozenset({"mandatory_reason"})
 SAFE_SCALAR_TYPES = {
+    "budget_floor_applied": bool,
     "cancelled_before_execution": bool,
+    "effective_limit": int,
     "exit_code": int,
     "file_changed": bool,
     "legacy_schema_version": int,
+    "matching_history_count": int,
     "new_unique_source_count": int,
     "result_digest_changed": bool,
 }
@@ -99,7 +115,7 @@ def sanitize_metadata(
     source: str,
     home_directory: str | None = None,
 ) -> dict[str, Any]:
-    allowed = SAFE_METADATA_BY_SOURCE.get(source, frozenset())
+    allowed = SAFE_METADATA_BY_SOURCE.get(source, frozenset()) | POLICY_CONTEXT_FIELDS
     result: dict[str, Any] = {}
     for key, value in metadata.items():
         name = str(key)
@@ -108,7 +124,9 @@ def sanitize_metadata(
         elif name in SENSITIVE_KEYS:
             result[name] = "[REDACTED]"
         elif name in allowed:
-            if name in SAFE_ENUMS and (
+            if name in SAFE_ENUMS and value is None and name in SAFE_NULLABLE_ENUMS:
+                result[name] = None
+            elif name in SAFE_ENUMS and (
                 not isinstance(value, str) or value not in SAFE_ENUMS[name]
             ):
                 result[name] = _hash(str(value))

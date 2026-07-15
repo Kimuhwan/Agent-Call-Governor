@@ -226,8 +226,15 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         self.assertEqual(allowed.behavior["type"], "allow")
         self.assertEqual(blocked.behavior["type"], "reject_content")
         self.assertEqual(
-            [event.phase for event in self.ledger.events("guardrail-session")],
-            ["proposed", "started", "proposed", "blocked"],
+            [event.event_type for event in self.ledger.events("guardrail-session")],
+            [
+                "call.proposed",
+                "policy.decided",
+                "call.started",
+                "call.proposed",
+                "policy.decided",
+                "call.blocked",
+            ],
         )
         persisted = (Path(self.tempdir.name) / "events.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("secret@example.com", persisted)
@@ -290,7 +297,10 @@ class AgentsSDKAdapterTests(unittest.TestCase):
         asyncio.run(exercise())
 
         events = self.ledger.events("no-tool-id")
-        self.assertEqual([event.phase for event in events], ["proposed", "started", "completed"])
+        self.assertEqual(
+            [event.event_type for event in events],
+            ["call.proposed", "policy.decided", "call.started", "call.completed"],
+        )
         self.assertNotIn("private result", json.dumps([event.to_dict() for event in events]))
 
     @unittest.skipUnless(SDK_AVAILABLE, "openai-agents optional extra is not installed")

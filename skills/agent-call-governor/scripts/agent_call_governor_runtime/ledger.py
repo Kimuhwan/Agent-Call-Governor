@@ -12,13 +12,22 @@ from collections.abc import Callable, Sequence
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
+from .fingerprint import FINGERPRINT_VERSION
 from .models import (
     CallEvent,
+    RuntimeDecision,
     SessionSummary,
     _sanitized_event_metadata,
     _validate_event_boundary,
+)
+from .policy import (
+    POLICY_ALLOW_REASON_CODES,
+    POLICY_CONTEXT_FIELDS,
+    POLICY_REASON_CODES,
+    POLICY_VERSION,
+    validate_policy_context,
 )
 from .policy import PROGRESS_VALUES
 
@@ -142,7 +151,6 @@ _SQL_TOKEN_PATTERN = re.compile(
     """,
     re.DOTALL | re.VERBOSE,
 )
-T = TypeVar("T")
 _TERMINAL_EVENT_TYPES = frozenset({
     "call.completed",
     "call.failed",
@@ -312,6 +320,10 @@ class DuplicateCallIdError(ValueError):
         self.session_id = session_id
         self.call_id = call_id
         super().__init__(f"call_id already exists in session: {call_id}")
+
+
+class StoredDecisionReplayError(ValueError):
+    """An existing call lacks one complete canonical policy decision."""
 
 
 class SecureCleanupIncompleteError(RuntimeError):
@@ -904,8 +916,13 @@ class CallLedger:
     def atomic_transition(
         self,
         session_id: str,
-        operation: Callable[[list[dict[str, Any]]], tuple[T, Sequence[CallEvent]]],
-    ) -> T:
+        call_id: str,
+        fingerprint: str,
+        operation: Callable[
+            [list[dict[str, str]]],
+            tuple[RuntimeDecision, list[CallEvent]],
+        ],
+    ) -> RuntimeDecision:
         """Serialize history evaluation and lifecycle reservation in SQLite.
 
         ``BEGIN IMMEDIATE`` ensures concurrent processes cannot both decide from
@@ -913,27 +930,61 @@ class CallLedger:
         after the authoritative SQLite transaction commits.
         """
         events: tuple[CallEvent, ...] = ()
+        decision: RuntimeDecision | None = None
         with closing(self._connect()) as connection:
             try:
                 connection.execute("BEGIN IMMEDIATE")
-                history = self._history(connection, session_id)
-                result, built_events = operation(history)
-                events = tuple(built_events)
-                if not events:
-                    raise ValueError("atomic transition must persist at least one event")
-                call_ids = {event.call_id for event in events}
-                if len(call_ids) != 1:
-                    raise ValueError("atomic transition events must share one call_id")
-                for event in events:
-                    if event.session_id != session_id:
-                        raise ValueError("atomic transition events must match session_id")
-                call_id = next(iter(call_ids))
-                existing = connection.execute(
-                    "SELECT 1 FROM call_events WHERE session_id = ? AND call_id = ? LIMIT 1",
+                existing_rows = connection.execute(
+                    """
+                    SELECT * FROM call_events
+                    WHERE session_id = ? AND call_id = ?
+                    ORDER BY seq
+                    """,
                     (session_id, call_id),
-                ).fetchone()
-                if existing is not None:
-                    raise DuplicateCallIdError(session_id, call_id)
+                ).fetchall()
+                if existing_rows:
+                    try:
+                        existing_events = [_event_from_row(row) for row in existing_rows]
+                    except ValueError as exc:
+                        raise StoredDecisionReplayError(str(exc)) from exc
+                    if any(
+                        event.fingerprint != fingerprint
+                        or event.fingerprint_version != FINGERPRINT_VERSION
+                        for event in existing_events
+                    ):
+                        raise DuplicateCallIdError(session_id, call_id)
+                    try:
+                        decision = _stored_runtime_decision(existing_events)
+                        _validate_atomic_reservation(
+                            existing_events,
+                            decision,
+                            session_id=session_id,
+                            call_id=call_id,
+                            fingerprint=fingerprint,
+                            allow_terminal_suffix=True,
+                        )
+                    except StoredDecisionReplayError:
+                        raise
+                    except ValueError as exc:
+                        raise StoredDecisionReplayError(str(exc)) from exc
+                    connection.commit()
+                    return decision
+
+                history = self._history(connection, session_id)
+                built_decision, built_events = operation(history)
+                if not isinstance(built_decision, RuntimeDecision):
+                    raise TypeError("atomic transition must return a RuntimeDecision")
+                events = tuple(built_events)
+                decision = _stored_runtime_decision(events)
+                _validate_atomic_reservation(
+                    events,
+                    decision,
+                    session_id=session_id,
+                    call_id=call_id,
+                    fingerprint=fingerprint,
+                    allow_terminal_suffix=False,
+                )
+                _validate_callback_decision(built_decision, decision)
                 for event in events:
                     self._insert(connection, event)
                 connection.commit()
@@ -941,7 +992,9 @@ class CallLedger:
                 connection.rollback()
                 raise
         self._mirror_best_effort(events)
-        return result
+        if decision is None:  # pragma: no cover - guarded by transaction validation
+            raise RuntimeError("atomic transition did not produce a decision")
+        return decision
 
     @staticmethod
     def _insert(connection: sqlite3.Connection, event: CallEvent) -> None:
@@ -1244,14 +1297,18 @@ class CallLedger:
             "SELECT * FROM call_events WHERE session_id = ? ORDER BY seq",
             (session_id,),
         ).fetchall()
-        latest_lifecycle: dict[str, tuple[int, CallEvent]] = {}
+        logical_state: dict[str, tuple[int, CallEvent]] = {}
         for index, row in enumerate(rows):
             event = _event_from_row(row)
-            if event.event_type in _CALL_LIFECYCLE_EVENT_TYPES:
-                latest_lifecycle[event.call_id] = (index, event)
+            if event.event_type in _COUNTED_EVENT_TYPES:
+                logical_state[event.call_id] = (index, event)
+            elif event.event_type == "call.cancelled":
+                previous = logical_state.get(event.call_id)
+                if previous is not None and previous[1].event_type == "call.started":
+                    logical_state[event.call_id] = (index, event)
 
         history: list[dict[str, Any]] = []
-        for _, event in sorted(latest_lifecycle.values()):
+        for _, event in sorted(logical_state.values()):
             if event.event_type not in _COUNTED_EVENT_TYPES:
                 continue
             item: dict[str, Any] = {
@@ -1264,6 +1321,364 @@ class CallLedger:
                 item["progress"] = event.progress
             history.append(item)
         return history
+
+
+def _validate_atomic_reservation(
+    events: Sequence[CallEvent],
+    decision: RuntimeDecision,
+    *,
+    session_id: str,
+    call_id: str,
+    fingerprint: str,
+    allow_terminal_suffix: bool,
+) -> None:
+    """Require the exact canonical reservation prefix and shared call identity."""
+    if allow_terminal_suffix:
+        if len(events) not in {3, 4}:
+            raise ValueError(
+                "atomic transition replay must contain three rows and at most one terminal"
+            )
+    elif len(events) != 3:
+        raise ValueError("fresh atomic transition must contain exactly three rows")
+    expected_types = (
+        "call.proposed",
+        "policy.decided",
+        "call.started" if decision.execution_allowed else "call.blocked",
+    )
+    if tuple(event.event_type for event in events[:3]) != expected_types:
+        raise ValueError(
+            "atomic transition must persist proposed, decided, and start/block in order"
+        )
+
+    expected_shapes = (
+        ("proposed", "proposed"),
+        ("proposed", "decided"),
+        (
+            "started" if decision.execution_allowed else "blocked",
+            "running" if decision.execution_allowed else "blocked",
+        ),
+    )
+    first = events[0]
+    shared_fields = (
+        "trace_id",
+        "turn_id",
+        "span_id",
+        "parent_span_id",
+        "parent_call_id",
+        "objective",
+        "route",
+        "budget_kind",
+        "profile",
+        "quality_risk",
+        "mode",
+        "failure_policy",
+        "input_digest",
+        "fingerprint_version",
+        "source",
+        "source_event",
+    )
+    for index, event in enumerate(events[:3]):
+        if event.session_id != session_id:
+            raise ValueError("atomic transition events must match session_id")
+        if event.call_id != call_id:
+            raise ValueError("atomic transition events must match call_id")
+        if event.fingerprint != fingerprint:
+            raise ValueError("atomic transition events must match fingerprint")
+        if event.fingerprint_version != FINGERPRINT_VERSION:
+            raise ValueError("atomic transition events must use the current fingerprint epoch")
+        if event.input_digest is None:
+            raise ValueError("atomic transition events must include input_digest")
+        if event.span_id != call_id:
+            raise ValueError("atomic transition span_id must match call_id")
+        if event.parent_span_id != event.parent_call_id:
+            raise ValueError("atomic transition parent span identity is inconsistent")
+        phase, status = expected_shapes[index]
+        if event.phase != phase or event.status != status:
+            raise ValueError(
+                f"atomic transition {event.event_type} has inconsistent phase or status"
+            )
+        if any(
+            getattr(event, field_name) != getattr(first, field_name)
+            for field_name in shared_fields
+        ):
+            raise ValueError("atomic transition events must share canonical call identity")
+
+    execution_only_fields = (
+        "progress",
+        "duration_ms",
+        "execution_latency_ms",
+        "error_type",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "estimated_cost_usd",
+        "pricing_version",
+    )
+    for event in events[:3]:
+        if any(getattr(event, name) is not None for name in execution_only_fields):
+            raise ValueError(
+                f"atomic transition {event.event_type} contains execution-only fields"
+            )
+
+    proposal_event, decision_event, execution_event = events[:3]
+    facts = proposal_event.policy_facts
+    if facts is None:
+        raise ValueError("atomic transition call.proposed must contain policy facts")
+    expected_facts = {
+        "fingerprint": fingerprint,
+        "fingerprint_version": FINGERPRINT_VERSION,
+        "budget_kind": proposal_event.budget_kind,
+        "profile": proposal_event.profile,
+        "risk": proposal_event.quality_risk,
+    }
+    if any(facts.get(name) != value for name, value in expected_facts.items()):
+        raise ValueError("atomic transition policy facts contradict the proposal event")
+    if any(event.policy_facts is not None for event in events[1:]):
+        raise ValueError("atomic transition policy facts belong only on call.proposed")
+    if (
+        set(proposal_event.metadata) & POLICY_CONTEXT_FIELDS
+        or set(execution_event.metadata) & POLICY_CONTEXT_FIELDS
+    ):
+        raise ValueError("atomic transition policy context belongs only on policy.decided")
+    if decision.reason.startswith("internal_error_"):
+        if decision.context or decision_event.metadata:
+            raise ValueError("atomic transition internal-error context must be empty")
+    else:
+        context = validate_policy_context(decision_event.metadata)
+        if context != dict(decision.context):
+            raise ValueError("atomic transition policy context is inconsistent")
+        if (
+            context["profile"] != decision_event.profile
+            or context["quality_risk"] != decision_event.quality_risk
+            or context["budget_kind"] != decision_event.budget_kind
+            or context["mandatory_reason"] != facts["mandatory_reason"]
+            or decision.budget_before
+            != max(
+                context["effective_limit"] - context["matching_history_count"],
+                0,
+            )
+        ):
+            raise ValueError("atomic transition policy context contradicts canonical fields")
+
+    proposal_decision_fields = (
+        "policy_allowed",
+        "execution_allowed",
+        "decision_reason",
+        "decision",
+        "reason_code",
+        "policy_version",
+        "budget_before",
+        "budget_after",
+        "decision_latency_ms",
+        "execution_latency_ms",
+    )
+    if any(getattr(proposal_event, name) is not None for name in proposal_decision_fields):
+        raise ValueError("atomic transition call.proposed contains decision-only fields")
+    if (
+        execution_event.policy_allowed != decision.policy_allowed
+        or execution_event.execution_allowed != decision.execution_allowed
+        or execution_event.decision_reason != decision.reason
+    ):
+        raise ValueError("atomic transition start/block compatibility decision is inconsistent")
+    execution_canonical_fields = (
+        "decision",
+        "reason_code",
+        "policy_version",
+        "budget_before",
+        "budget_after",
+        "decision_latency_ms",
+        "execution_latency_ms",
+    )
+    if any(
+        getattr(execution_event, name) is not None
+        for name in execution_canonical_fields
+    ):
+        raise ValueError("atomic transition start/block contains decision-only fields")
+
+    terminal_shapes = {
+        "call.completed": ("completed", "completed"),
+        "call.failed": ("failed", "failed"),
+        "call.cancelled": ("cancelled", "cancelled"),
+    }
+    suffix = events[3:]
+    if suffix and not decision.execution_allowed:
+        raise ValueError("atomic transition blocked calls cannot have a terminal suffix")
+    if len(suffix) > 1:
+        raise ValueError("atomic transition calls can have at most one terminal suffix")
+    lifecycle_shared_fields = tuple(
+        field_name
+        for field_name in shared_fields
+        if field_name not in {"source", "source_event"}
+    )
+    terminal_decision_fields = (
+        "policy_allowed",
+        "execution_allowed",
+        "decision_reason",
+        "decision",
+        "reason_code",
+        "policy_version",
+        "budget_before",
+        "budget_after",
+        "decision_latency_ms",
+    )
+    for event in suffix:
+        shape = terminal_shapes.get(event.event_type)
+        if shape is None or (event.phase, event.status) != shape:
+            raise ValueError("atomic transition replay contains an invalid lifecycle suffix")
+        if (
+            event.session_id != session_id
+            or event.call_id != call_id
+            or event.span_id != call_id
+            or event.fingerprint != fingerprint
+            or event.fingerprint_version != FINGERPRINT_VERSION
+            or any(
+                getattr(event, field_name) != getattr(first, field_name)
+                for field_name in lifecycle_shared_fields
+            )
+        ):
+            raise ValueError("atomic transition replay suffix has inconsistent call identity")
+        if any(getattr(event, name) is not None for name in terminal_decision_fields):
+            raise ValueError("atomic transition terminal suffix contains decision-only fields")
+
+
+def _stored_runtime_decision(events: Sequence[CallEvent]) -> RuntimeDecision:
+    decisions = [event for event in events if event.event_type == "policy.decided"]
+    if len(decisions) != 1:
+        raise StoredDecisionReplayError(
+            "existing call must contain exactly one policy.decided event"
+        )
+    event = decisions[0]
+    required = {
+        "policy_allowed": event.policy_allowed,
+        "execution_allowed": event.execution_allowed,
+        "decision_reason": event.decision_reason,
+        "decision": event.decision,
+        "reason_code": event.reason_code,
+        "policy_version": event.policy_version,
+        "decision_latency_ms": event.decision_latency_ms,
+    }
+    missing = [name for name, value in required.items() if value is None]
+    if missing:
+        raise StoredDecisionReplayError(
+            "stored policy.decided event is incomplete: " + ", ".join(missing)
+        )
+    if event.status != "decided" or event.phase != "proposed":
+        raise StoredDecisionReplayError(
+            "stored policy.decided event has inconsistent status or phase"
+        )
+    if event.reason_code != event.decision_reason:
+        raise StoredDecisionReplayError(
+            "stored policy.decided reason code does not match decision reason"
+        )
+    if event.decision_reason not in POLICY_REASON_CODES | {
+        "internal_error_fail_open",
+        "internal_error_fail_closed",
+    }:
+        raise StoredDecisionReplayError(
+            "stored policy.decided event has an unknown reason code"
+        )
+    if event.policy_version != POLICY_VERSION:
+        raise StoredDecisionReplayError(
+            "stored policy.decided event has an unknown policy version"
+        )
+    if event.input_digest is None or event.fingerprint_version != FINGERPRINT_VERSION:
+        raise StoredDecisionReplayError(
+            "stored policy.decided event lacks current digest fields"
+        )
+    if event.decision == "allow":
+        consistent = event.policy_allowed and event.execution_allowed
+    elif event.decision == "would_block":
+        consistent = (
+            not event.policy_allowed
+            and event.execution_allowed
+            and event.mode in {"observe", "warn"}
+        )
+    elif event.decision == "block":
+        consistent = (
+            not event.policy_allowed
+            and not event.execution_allowed
+            and event.mode == "enforce"
+        )
+    else:
+        consistent = (
+            event.decision == "internal_error"
+            and not event.policy_allowed
+            and event.decision_reason
+            in {"internal_error_fail_open", "internal_error_fail_closed"}
+            and event.failure_policy
+            == (
+                "fail-open"
+                if event.decision_reason == "internal_error_fail_open"
+                else "fail-closed"
+            )
+            and event.execution_allowed
+            == (event.decision_reason == "internal_error_fail_open")
+        )
+    if not consistent:
+        raise StoredDecisionReplayError(
+            "stored policy.decided decision is inconsistent with runtime fields"
+        )
+    if event.decision == "internal_error":
+        if event.budget_before is not None or event.budget_after is not None:
+            raise StoredDecisionReplayError(
+                "stored internal-error decision budgets must be null"
+            )
+        if event.metadata:
+            raise StoredDecisionReplayError(
+                "stored internal-error decision context must be empty"
+            )
+        context: dict[str, Any] = {}
+    else:
+        if event.policy_allowed != (event.decision_reason in POLICY_ALLOW_REASON_CODES):
+            raise StoredDecisionReplayError(
+                "stored policy.decided allowed and reason are inconsistent"
+            )
+        if event.budget_before is None or event.budget_after is None:
+            raise StoredDecisionReplayError(
+                "stored policy.decided event lacks canonical budget fields"
+            )
+        if event.budget_after != max(
+            event.budget_before - int(event.execution_allowed),
+            0,
+        ):
+            raise StoredDecisionReplayError(
+                "stored policy.decided budget fields are inconsistent"
+            )
+        try:
+            context = validate_policy_context(event.metadata)
+        except ValueError as exc:
+            raise StoredDecisionReplayError(str(exc)) from exc
+    return RuntimeDecision(
+        policy_allowed=event.policy_allowed,
+        execution_allowed=event.execution_allowed,
+        reason=event.decision_reason,
+        fingerprint=event.fingerprint,
+        remaining_after_call=event.budget_after,
+        context=context,
+        budget_before=event.budget_before,
+        budget_after=event.budget_after,
+        decision_latency_ms=event.decision_latency_ms,
+    )
+
+
+def _validate_callback_decision(
+    callback: RuntimeDecision,
+    stored: RuntimeDecision,
+) -> None:
+    for field_name in (
+        "policy_allowed",
+        "execution_allowed",
+        "reason",
+        "fingerprint",
+        "budget_before",
+        "budget_after",
+        "decision_latency_ms",
+        "context",
+    ):
+        if getattr(callback, field_name) != getattr(stored, field_name):
+            raise ValueError(
+                f"atomic transition callback decision mismatch: {field_name}"
+            )
 
 
 def _optional_bool(value: bool | None) -> int | None:

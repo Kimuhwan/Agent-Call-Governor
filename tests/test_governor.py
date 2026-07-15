@@ -239,6 +239,39 @@ class GovernorTests(unittest.TestCase):
         self.assertEqual(result["matching_history_count"], 1)
         self.assertTrue(result["allowed"])
 
+    def test_unknown_progress_consumes_budget_without_triggering_a_stop_rule(self):
+        result = governor.evaluate({
+            "proposal": proposal(route="different-agent"),
+            "profile": "balanced",
+            "budget": {"limit": 2},
+            "history": [{"budget_kind": "agent", "progress": "unknown"}],
+        })
+        self.assertTrue(result["allowed"])
+        self.assertEqual(result["reason"], "allowed")
+        self.assertEqual(result["matching_history_count"], 1)
+        self.assertEqual(result["remaining_after_call"], 0)
+
+    def test_unknown_progress_is_filtered_only_from_actionable_stop_rules(self):
+        cases = (
+            ("sufficient", "stop_condition_already_satisfied"),
+            ("no_progress", "no_progress_stop"),
+            ("low_progress", "changed_strategy_required"),
+        )
+        for progress, expected_reason in cases:
+            with self.subTest(progress=progress):
+                result = governor.evaluate({
+                    "proposal": proposal(route=f"route-{progress}"),
+                    "profile": "quality-first",
+                    "budget": {"limit": 10},
+                    "history": [
+                        {"budget_kind": "agent", "progress": progress},
+                        {"budget_kind": "agent", "progress": "unknown"},
+                    ],
+                })
+                self.assertFalse(result["allowed"])
+                self.assertEqual(result["reason"], expected_reason)
+                self.assertEqual(result["matching_history_count"], 2)
+
     def test_quality_first_allows_two_changed_strategy_retries(self):
         result = governor.evaluate({
             "proposal": proposal(changed_strategy="Recalculate from raw inputs"),
