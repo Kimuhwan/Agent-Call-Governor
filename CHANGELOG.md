@@ -2,7 +2,7 @@
 
 All notable changes to Agent Call Governor are documented here.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-07-15
 
 ### Added
 
@@ -10,6 +10,7 @@ All notable changes to Agent Call Governor are documented here.
 - Local schema-v2 SQLite observability, session inspection, reporting, sanitized export, secure deletion, retention, and seven-check doctor commands.
 - Fingerprint v2, source-aware redaction, safe v0.2 migration, transactional policy decisions, and multiprocess delivery handling.
 - English and Korean plugin onboarding plus architecture, limitations, security, benchmark, contribution, and vulnerability-reporting documentation.
+- A mechanically rendered 10/10 instrumentation pilot and tracked-file-only release packaging with deterministic checksums.
 
 ### Changed
 

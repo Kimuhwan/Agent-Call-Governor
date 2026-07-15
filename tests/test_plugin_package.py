@@ -191,7 +191,7 @@ class PluginPackageTests(unittest.TestCase):
         self.assertIn("does not measure model response quality", benchmark)
 
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        self.assertRegex(changelog, r"(?m)^## \[0\.3\.0\] - Unreleased$")
+        self.assertRegex(changelog, r"(?m)^## \[0\.3\.0\] - 2026-07-15$")
         self.assertRegex(changelog, r"(?m)^## \[0\.2\.0\]")
         self.assertRegex(changelog, r"(?m)^## \[0\.1\.0\]")
 

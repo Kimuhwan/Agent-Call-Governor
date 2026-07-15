@@ -5,7 +5,7 @@
 [![Validate](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml/badge.svg)](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Codex Plugin](https://img.shields.io/badge/Codex-Plugin-111827)](.codex-plugin/plugin.json)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](pyproject.toml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://github.com/Kimuhwan/Agent-Call-Governor/blob/v0.3.0/pyproject.toml)
 
 Codex 호출을 위한 로컬 우선, 품질 보존형 거버넌스 및 관측 도구입니다.
 
@@ -133,7 +133,7 @@ agent-call-governor-runtime delete-session SESSION_ID --yes --db PATH_TO_EVENTS
 
 평가 우선순위는 **작업 성공**, **부족 호출률**, **오차단률**, 그리고 **호출 효율** 순입니다. 호출 수 감소는 품질 하한을 지킨 뒤에만 의미가 있습니다.
 
-체크인된 결정론적 정책 모음, 런타임 재생, 소규모 매칭 A/B 연구는 방향성 근거입니다. v0.3의 10개 사례 계측 파일럿은 모델 품질 벤치마크가 아니며, 실행기와 날짜가 있는 결과가 체크인된 뒤에만 근거로 사용해야 합니다. 어느 결과도 운영 환경의 작업 성공률, 절감률, 지연 시간 또는 일반화 성능을 입증하지 않습니다. [벤치마크 방법론](docs/benchmark-methodology.md)과 [평가 설명](evals/README.md)을 참고하세요.
+체크인된 결정론적 정책 모음, 런타임 재생, 소규모 매칭 A/B 연구는 방향성 근거입니다. v0.3의 10개 사례 계측 파일럿은 모델 품질 벤치마크가 아니며, 실행기와 날짜가 있는 결과가 체크인된 뒤에만 근거로 사용해야 합니다. 어느 결과도 운영 환경의 작업 성공률, 절감률, 지연 시간 또는 일반화 성능을 입증하지 않습니다. [벤치마크 방법론](docs/benchmark-methodology.md)과 [평가 설명](https://github.com/Kimuhwan/Agent-Call-Governor/blob/v0.3.0/evals/README.md)을 참고하세요.
 
 주요 한계는 다음과 같습니다.
 
@@ -169,11 +169,14 @@ rm -rf -- "$HOME/.codex/skills/agent-call-governor"
 
 ## 로컬 검증
 
+아래 명령은 소스 체크아웃에서 실행하세요. 평가 및 패키징 소스는 설치용 플러그인 압축 파일에 의도적으로 포함되지 않습니다.
+
 ```console
 python -m pip install -e ".[dev]"
 python -m unittest discover -s tests -v
 python evals/run_evals.py
 python evals/run_runtime_evals.py
+python evals/run_instrumentation_evals.py
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/agent-call-governor
 python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
 python -m build

@@ -5,7 +5,7 @@
 [![Validate](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml/badge.svg)](https://github.com/Kimuhwan/Agent-Call-Governor/actions/workflows/validate.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Codex Plugin](https://img.shields.io/badge/Codex-Plugin-111827)](.codex-plugin/plugin.json)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](pyproject.toml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB)](https://github.com/Kimuhwan/Agent-Call-Governor/blob/v0.3.0/pyproject.toml)
 
 Local-first, quality-preserving governance and observability for Codex calls.
 
@@ -133,7 +133,7 @@ Read the [security architecture](docs/security.md) and [vulnerability reporting 
 
 Evaluation priority is: **task success**, **under-call rate**, **false-block rate**, then **call efficiency**. A lower call count is useful only after the quality floor holds.
 
-The checked-in deterministic policy suite, runtime replay, and small matched A/B study are directional evidence. The v0.3 ten-case instrumentation pilot is not a model-quality benchmark; rely on it only after its runner and dated results are checked in. None of these results establishes production task success, savings, latency, or generalization. See [benchmark methodology](docs/benchmark-methodology.md) and [evaluation details](evals/README.md).
+The checked-in deterministic policy suite, runtime replay, and small matched A/B study are directional evidence. The v0.3 ten-case instrumentation pilot is not a model-quality benchmark; rely on it only after its runner and dated results are checked in. None of these results establishes production task success, savings, latency, or generalization. See [benchmark methodology](docs/benchmark-methodology.md) and [evaluation details](https://github.com/Kimuhwan/Agent-Call-Governor/blob/v0.3.0/evals/README.md).
 
 Known limits:
 
@@ -169,11 +169,14 @@ Plugin removal, wheel uninstall, compatibility-skill removal, and SQLite-data de
 
 ## Validate locally
 
+Run these commands from a source checkout; evaluation and packaging sources are intentionally not bundled in the installed plugin archive.
+
 ```console
 python -m pip install -e ".[dev]"
 python -m unittest discover -s tests -v
 python evals/run_evals.py
 python evals/run_runtime_evals.py
+python evals/run_instrumentation_evals.py
 python ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py skills/agent-call-governor
 python ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py .
 python -m build
