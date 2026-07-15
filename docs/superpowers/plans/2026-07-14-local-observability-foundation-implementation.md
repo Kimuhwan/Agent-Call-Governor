@@ -1344,8 +1344,8 @@ class EventV2RuntimeTests(unittest.TestCase):
         self.assertEqual(events[0].policy_facts["fingerprint_version"], 2)
         self.assertEqual(events[1].policy_version, "2026-07-14.1")
         self.assertIsNotNone(events[1].decision_latency_ms)
-        self.assertEqual(events[1].budget_before, 3)
-        self.assertEqual(events[1].budget_after, 2)
+        self.assertEqual(events[1].budget_before, 6)
+        self.assertEqual(events[1].budget_after, 5)
 
     def test_same_call_id_and_fingerprint_returns_persisted_decision(self) -> None:
         first = self.runtime.begin(proposal(), call_id="host-call-ref")
@@ -1433,6 +1433,8 @@ Do not add objective, gap, expectation, stop text, material inputs, cwd, tool re
 
 Change `RuntimeDecision` to include exact nullable `budget_before`, `budget_after`, and `decision_latency_ms` fields while retaining `remaining_after_call` as a compatibility alias of `budget_after`. Measure only policy evaluation with `time.perf_counter_ns()`.
 
+Budget telemetry records the effective quality-preserving policy limit, not the raw requested limit. For example, balanced/medium direct-tool work requesting `3` inherits the profile floor of `6`, so the first executable call records `budget_before = 6` and `budget_after = 5`. This keeps observability consistent with the decision that was actually enforced.
+
 Persist event `decision` as `allow` when policy allows, `would_block` when policy denies in observe/warn mode, `block` when policy denies in an application-owned enforce mode, and `internal_error` for evaluator/ledger fail-open or fail-closed paths. Persist canonical `status` values `proposed`, `decided`, `running`, `blocked`, `completed`, `failed`, `cancelled`, `observed`, `started`, and `stopped` according to event type; keep `reason_code` equal to the stable policy reason rather than human warning copy.
 
 Change ledger atomic reservation to this interface:
@@ -1447,7 +1449,7 @@ def atomic_transition(
 ) -> RuntimeDecision:
 ```
 
-Inside one `BEGIN IMMEDIATE`, first query rows for `(session_id, call_id)`. If present with the same fingerprint, reconstruct and return the stored `policy.decided` decision without inserting. If present with a different fingerprint, raise `DuplicateCallIdError`. Otherwise calculate history, evaluate policy, and insert the exact ordered sequence `call.proposed`, `policy.decided`, then `call.started` or `call.blocked` before commit.
+Inside one `BEGIN IMMEDIATE`, first query rows for `(session_id, call_id)`. If present with the same fingerprint, reconstruct and return the stored `policy.decided` decision without inserting. Replay may contain the three-row reservation plus one canonical terminal row that a later completion API appended. If present with a different fingerprint, raise `DuplicateCallIdError`. Otherwise calculate history, evaluate policy, and require the fresh callback to insert exactly the ordered three-row sequence `call.proposed`, `policy.decided`, then `call.started` or `call.blocked` before commit; a fresh callback cannot pre-complete the call.
 
 Rework `CallLedger.history` to emit exactly one policy-history item per logical call. It considers only `call.started`, `call.completed`, `call.failed`, and pre-execution `call.cancelled`, groups by `(session_id, call_id)`, counts started/completed/failed calls as consumed, releases a start followed by pre-execution cancellation, and ignores `session.*`, `call.proposed`, `policy.decided`, and `progress.observed` rows for budget counts.
 
@@ -1484,6 +1486,7 @@ Expected: focused tests PASS; concurrent final-budget reservation still permits 
 - Modify: `skills/agent-call-governor/scripts/agent_call_governor_runtime/cli.py`
 - Modify: `skills/agent-call-governor/scripts/agent_call_governor_runtime/ledger.py`
 - Modify: `tests/test_codex_hook.py`
+- Modify: `tests/test_plugin_package.py`
 
 **Interfaces:**
 - Consumes: Codex hook JSON on stdin, `PLUGIN_ROOT`, `PLUGIN_DATA`, schema-v2 ledger, and `GovernedRuntime`.
@@ -1625,15 +1628,17 @@ Implement the six branches exactly:
 
 Wrap retention and stale recovery as independent best-effort maintenance operations: a maintenance exception records no raw diagnostic data and does not prevent the valid `session.started` or `session.stopped` event from being processed. Migration/open failure remains at the outer dispatcher boundary and exits zero without hook output.
 
-Add the exact ledger boundary `append_bounded_delivery_if_new(self, event: CallEvent, delivery_digest: str, *, window_seconds: int = 5) -> bool`. It runs in `BEGIN IMMEDIATE`, compares `input_digest = delivery_digest` only against rows with the same `event_type` and hashed trace whose `observed_at` is inside the window, inserts when no row matches, and returns whether it inserted. It stores only the SHA-256 delivery digest. Stop with a turn ID relies on the unique hashed call/event identity; Stop without one uses this same bounded-digest method with `event_type = "session.stopped"`.
+Add the exact ledger boundary `append_bounded_delivery_if_new(self, event: CallEvent, delivery_digest: str, *, window_seconds: int = 5) -> bool`. It runs in `BEGIN IMMEDIATE`, compares `input_digest = delivery_digest` only against rows with the same `event_type` and hashed trace whose `observed_at` is inside the window, inserts when no row matches, and returns whether it inserted. It stores only the SHA-256 delivery digest. Stop with a turn ID uses a transaction-safe append-if-new ledger boundary keyed by hashed call identity and event type; a precheck followed by ordinary append is not sufficient. Stop without one uses this same bounded-digest method with `event_type = "session.stopped"`.
 
 For each SessionStart accepted outside the five-second window, generate a new UUID event/span/call reference so a legitimate later resume is not blocked by the strict tool-delivery index. Stop without a turn ID follows the same rule. Stop with a turn ID derives its call reference from the hashed turn ID and remains strictly idempotent for that turn.
 
 For Codex call proposals, set `trace_id = host_reference(session_id)`, `turn_id = host_reference(turn_id)`, and compatibility policy scope `session_id = f"codex:trace:{trace_id[7:]}:turn:{turn_id[7:]}"`. Exact fingerprint duplicate lookup therefore resets at the turn boundary while CLI sessions continue to group the whole hashed trace.
 
-For `SubagentStart`, use a delegated-task digest when the host provides task text. When the host exposes only `agent_type` and `agent_id`, include `opaque_invocation_digest = host_reference(agent_id)` in material inputs. This conservative fallback prevents two same-type agents with hidden tasks from becoming a false exact duplicate; repeated delivery of the same host ID is still collapsed by strict call-ID idempotency. Never persist the task text or raw agent ID.
+When the host omits `turn_id`, retain the existing call-local fallback policy scope and store `turn_id = None`; do not reject the hook and do not synthesize a turn identifier from raw host data.
 
-Implement `deterministic_progress(payload) -> tuple[str, dict[str, bool | int | str]] | None`. It returns `material_progress` for `file_changed is True`, a changed result digest, a positive new-source count, or test status `passed`; `sufficient` for explicit acceptance-criterion status `satisfied`; `low_progress` for a nonzero integer exit code; `material_progress` for exit code zero; and `None` when no listed signal exists. Persist only the allowlisted signal, never the result body. When a signal exists, set it on the terminal event and append a separate `progress.observed` event; without a signal, set only terminal `progress = "unknown"` and do not fabricate a progress event.
+For `SubagentStart`, use a delegated-task digest from the first non-empty string among the explicit host fields `task`, `prompt`, and `description`. When the host exposes only `agent_type` and `agent_id`, include `opaque_invocation_digest = host_reference(agent_id)` in material inputs. This conservative fallback prevents two same-type agents with hidden tasks from becoming a false exact duplicate; repeated delivery of the same host ID is still collapsed by strict call-ID idempotency. Never persist the task text or raw agent ID.
+
+Implement `deterministic_progress(payload) -> tuple[str, dict[str, bool | int | str]] | None`. Read strict-typed signals from either the top level or `tool_response`, and resolve conflicts with precedence `sufficient > material_progress > low_progress`. It returns `material_progress` for `file_changed is True`, a changed result digest, a positive new-source count, or test status `passed`; `sufficient` for explicit acceptance-criterion status `satisfied`; `low_progress` for a nonzero integer exit code; `material_progress` for exit code zero; and `None` when no listed valid signal exists. Persist only the allowlisted signal, never the result body. When a signal exists, set it on the terminal event and append a separate `progress.observed` event only if the terminal row was newly inserted; without a signal, set only terminal `progress = "unknown"` and do not fabricate a progress event.
 
 Set `parent_span_id` only when the host explicitly provides a parent identifier and hash that identifier first. Leave it null when the host omits ancestry; never infer a parent from event order.
 
@@ -1648,7 +1653,7 @@ return {
 }
 ```
 
-Replace `hooks/dispatch.py` with a boundary that parses environment configuration before constructing the runtime:
+Replace `hooks/dispatch.py` with an env-only boundary that parses environment configuration before constructing the runtime. Update the earlier argv-based dispatcher assertions in `tests/test_plugin_package.py`; the package CLI retains its separate compatibility command, while the plugin dispatcher does not accept a second configuration surface:
 
 ```python
 from __future__ import annotations
@@ -1870,6 +1875,7 @@ Expected: all unit tests PASS; doctor emits valid JSON and exits `0`; the tempor
 - Create: `tests/test_multiprocess_hooks.py`
 - Modify: `skills/agent-call-governor/scripts/agent_call_governor_runtime/ledger.py`
 - Modify: `hooks/dispatch.py`
+- Modify if a schema evolution is proven necessary: `tests/test_schema_migration.py`
 
 **Interfaces:**
 - Consumes: real `hooks/dispatch.py` subprocesses, shared SQLite WAL database, 1,000 ms plugin busy timeout.
@@ -1940,7 +1946,9 @@ Expected: at least one test FAIL from duplicate rows, an overspent decision, a l
 
 - [ ] **Step 3: Harden only the failing transaction and dispatcher paths**
 
-Keep every proposal lookup, history read, policy evaluation, and event reservation within the existing `BEGIN IMMEDIATE`. Add a unique index that prevents duplicate event-type delivery per call while still allowing the proposal/decision/start sequence:
+Keep every proposal lookup, history read, policy evaluation, and event reservation within the existing `BEGIN IMMEDIATE`. First rely on the transaction-safe Task 6 reservation and Task 7 append-if-new boundaries; do not add a redundant index when all real subprocess races already collapse correctly.
+
+Only if the RED subprocess test proves a remaining event-type delivery race, add a unique index that prevents duplicate event-type delivery per call while still allowing the proposal/decision/start sequence:
 
 ```sql
 CREATE UNIQUE INDEX IF NOT EXISTS idx_call_events_delivery
@@ -1948,6 +1956,8 @@ ON call_events(session_id, call_id, event_type, COALESCE(source_event, ''));
 ```
 
 Catch `sqlite3.IntegrityError` inside the transaction, re-read the persisted decision/event, and return it only when the stored fingerprint matches. Different fingerprints for the same call ID continue to raise `DuplicateCallIdError`.
+
+Adding that index changes the strictly admitted database shape. In that case, add schema-migration tests first, recognize only the exact prior canonical v2 table plus its two named indexes, create the third index transactionally, and then require the new exact three-index shape on reopen. Never broadly accept a missing-index or lookalike database and never make the index outside the verified migration boundary.
 
 Ensure plugin construction always passes `busy_timeout_ms=1000`; do not retry past that bound in the dispatcher. Keep runtime-wrapper default at 30000 ms. Never supply `jsonl_path` from dispatcher. Do not add process-global file locks or sleeps.
 
