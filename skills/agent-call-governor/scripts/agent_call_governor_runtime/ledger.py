@@ -314,6 +314,56 @@ class DuplicateCallIdError(ValueError):
         super().__init__(f"call_id already exists in session: {call_id}")
 
 
+class SecureCleanupIncompleteError(RuntimeError):
+    """Logical deletion committed, but physical cleanup must be retried."""
+
+    def __init__(
+        self,
+        operation: str,
+        committed_result: int | tuple[str, ...],
+        checkpoint_result: tuple[int, int, int] | None,
+    ) -> None:
+        self.operation = operation
+        self.committed_result = committed_result
+        self.checkpoint_result = checkpoint_result
+        super().__init__(
+            f"{operation}: logical deletion committed but secure cleanup is incomplete; "
+            "retry required"
+        )
+
+
+def _secure_cleanup_after_commit(
+    connection: sqlite3.Connection,
+    *,
+    operation: str,
+    committed_result: int | tuple[str, ...],
+) -> None:
+    checkpoint_result: tuple[int, int, int] | None = None
+    try:
+        checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        if checkpoint is None:
+            raise RuntimeError("WAL checkpoint returned no status")
+        values = tuple(checkpoint)
+        if len(values) != 3 or any(type(value) is not int for value in values):
+            raise RuntimeError("WAL checkpoint returned an invalid status")
+        checkpoint_result = (values[0], values[1], values[2])
+        busy, log_frames, checkpointed_frames = checkpoint_result
+        if (
+            busy != 0
+            or log_frames < 0
+            or checkpointed_frames < 0
+            or log_frames != checkpointed_frames
+        ):
+            raise RuntimeError("WAL checkpoint did not complete")
+        connection.execute("VACUUM")
+    except Exception as exc:
+        raise SecureCleanupIncompleteError(
+            operation,
+            committed_result,
+            checkpoint_result,
+        ) from exc
+
+
 class CallLedger:
     """Persist call lifecycle events and derive policy history per session."""
 
@@ -1028,8 +1078,15 @@ class CallLedger:
 
         summaries: list[SessionSummary] = []
         for trace_id, events in grouped.items():
-            first_event = min(events, key=lambda event: _observed_datetime(event.observed_at))
-            last_event = max(events, key=lambda event: _observed_datetime(event.observed_at))
+            indexed_events = tuple(enumerate(events))
+            _, first_event = min(
+                indexed_events,
+                key=lambda item: (_observed_datetime(item[1].observed_at), item[0]),
+            )
+            _, last_event = max(
+                indexed_events,
+                key=lambda item: (_observed_datetime(item[1].observed_at), item[0]),
+            )
             proposed_calls = {
                 event.call_id for event in events if event.event_type == "call.proposed"
             }
@@ -1040,7 +1097,9 @@ class CallLedger:
                     last_observed_at=last_event.observed_at,
                     call_count=len(proposed_calls),
                     event_count=len(events),
-                    final_status="active" if _trace_is_active(events) else events[-1].event_type,
+                    final_status=(
+                        "active" if _trace_is_active(events) else last_event.event_type
+                    ),
                 )
             )
         return summaries
@@ -1057,8 +1116,8 @@ class CallLedger:
     def delete_session(self, session_id: str) -> int:
         """Securely delete one operational trace and reclaim SQLite storage."""
         with closing(self._connect()) as connection:
+            connection.execute("PRAGMA secure_delete = ON")
             try:
-                connection.execute("PRAGMA secure_delete = ON")
                 connection.execute("BEGIN IMMEDIATE")
                 cursor = connection.execute(
                     "DELETE FROM call_events WHERE trace_id = ?",
@@ -1066,11 +1125,14 @@ class CallLedger:
                 )
                 deleted = cursor.rowcount
                 connection.commit()
-                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                connection.execute("VACUUM")
             except BaseException:
                 connection.rollback()
                 raise
+            _secure_cleanup_after_commit(
+                connection,
+                operation="delete_session",
+                committed_result=deleted,
+            )
         return deleted
 
     def prune_expired_sessions(
@@ -1084,8 +1146,8 @@ class CallLedger:
         cutoff = _normalized_datetime(now) - timedelta(days=days)
         removed: list[str] = []
         with closing(self._connect()) as connection:
+            connection.execute("PRAGMA secure_delete = ON")
             try:
-                connection.execute("PRAGMA secure_delete = ON")
                 connection.execute("BEGIN IMMEDIATE")
                 rows = connection.execute("SELECT * FROM call_events ORDER BY seq").fetchall()
                 grouped: dict[str, list[CallEvent]] = {}
@@ -1103,12 +1165,14 @@ class CallLedger:
                         )
                         removed.append(trace_id)
                 connection.commit()
-                if removed:
-                    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    connection.execute("VACUUM")
             except BaseException:
                 connection.rollback()
                 raise
+            _secure_cleanup_after_commit(
+                connection,
+                operation="prune_expired_sessions",
+                committed_result=tuple(removed),
+            )
         return removed
 
     def recover_stale_reservations(
@@ -1137,11 +1201,14 @@ class CallLedger:
                     (trace_id,),
                 ).fetchall()
                 events = [_event_from_row(row) for row in rows]
+                latest_lifecycle: dict[str | None, tuple[int, CallEvent]] = {}
                 for index, event in enumerate(events):
+                    if event.event_type in _CALL_LIFECYCLE_EVENT_TYPES:
+                        latest_lifecycle[event.span_id] = (index, event)
+                for _, event in sorted(latest_lifecycle.values()):
                     if (
                         event.event_type == "call.started"
                         and _observed_datetime(event.observed_at) < cutoff
-                        and not _has_later_terminal(events, index, event)
                     ):
                         cancellation = _stale_cancellation(event, observed_now)
                         self._insert(connection, cancellation)
